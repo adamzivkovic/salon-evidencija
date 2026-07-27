@@ -1,10 +1,7 @@
-// ============================================================
-// FIREBASE KONFIGURACIJA — Salon 2CATS
-// ============================================================
-
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
+import { getStorage } from "firebase/storage";
 
 const firebaseConfig = {
   apiKey: "AIzaSyD0wTEyvrg6PZuk8bxgR3k2VkOLx2eDLQo",
@@ -18,3 +15,4 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 export const auth = getAuth(app);
+export const storage = getStorage(app);

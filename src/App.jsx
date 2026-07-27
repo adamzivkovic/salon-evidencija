@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
-  collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, getDocs, writeBatch,
+  collection, doc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, getDocs, writeBatch,
 } from "firebase/firestore";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { db, auth } from "./firebase";
+import PayrollView from "./payroll/PayrollView.jsx";
+import * as XLSX from "xlsx";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
 } from "recharts";
@@ -16,10 +18,12 @@ import {
 /* Constants                                                          */
 /* ------------------------------------------------------------------ */
 
-const STAFF = [
-  { id: "ivana", name: "Ivana", color: "#7A2E3D" },
-  { id: "bilja", name: "Bilja", color: "#4A7A6B" },
-  { id: "tamara", name: "Tamara", color: "#C4914B" },
+// Koristi se samo jednom, da se Firebase baza zaposlenih popuni pri prvom pokretanju.
+// Posle toga se sve čuva u Firestore kolekciji "employees" (uređivanje UI dolazi kasnije).
+const SEED_EMPLOYEES = [
+  { id: "ivana", name: "Ivana", color: "#7A2E3D", calcType: "material_deduction", defaultPercentage: 30 },
+  { id: "bilja", name: "Bilja", color: "#4A7A6B", calcType: "commission", defaultPercentage: 40 },
+  { id: "tamara", name: "Tamara", color: "#C4914B", calcType: "material_deduction", defaultPercentage: 30 },
 ];
 
 // Koristi se samo jednom, da se Firebase baza usluga popuni pri prvom pokretanju.
@@ -47,12 +51,14 @@ const MONTH_NAMES = [
 const COLLECTION_APPOINTMENTS = "appointments";
 const COLLECTION_CLIENTS = "clients";
 const COLLECTION_SERVICES = "services";
+const COLLECTION_EMPLOYEES = "employees";
 
 const WORK_START_HOUR = 10;
 const WORK_END_HOUR = 20;
 const TOTAL_SLOTS = (WORK_END_HOUR - WORK_START_HOUR) * 2; // 30-min slots
 const ROW_HEIGHT = 34;
 const TIMELINE_HEIGHT = TOTAL_SLOTS * ROW_HEIGHT;
+const STAFF_HEADER_HEIGHT = 28;
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                            */
@@ -127,8 +133,8 @@ function formatDuration(min) {
   return `${Math.floor(m / 60)} h ${m % 60} min`;
 }
 
-function staffById(id) {
-  return STAFF.find((s) => s.id === id) || STAFF[0];
+function staffById(id, employees) {
+  return employees.find((s) => s.id === id) || employees[0] || { id, name: "?", color: "#B4A296" };
 }
 
 function slotLabel(i) {
@@ -138,8 +144,15 @@ function slotLabel(i) {
   return `${pad2(h)}:${pad2(m)}`;
 }
 
-// 10:00, 10:30, 11:00 ... 20:00 — za padajući meni u formi zakazivanja
-const TIME_OPTIONS = Array.from({ length: TOTAL_SLOTS + 1 }, (_, i) => slotLabel(i));
+// 10:00, 10:10, 10:20 ... 20:00 — za padajući meni u formi zakazivanja
+// (nezavisno od 30-minutne mreže na vremenskoj osi, koja ostaje za pregled)
+const TIME_OPTIONS = [];
+for (let h = WORK_START_HOUR; h <= WORK_END_HOUR; h++) {
+  for (let m = 0; m < 60; m += 10) {
+    if (h === WORK_END_HOUR && m > 0) break;
+    TIME_OPTIONS.push(`${pad2(h)}:${pad2(m)}`);
+  }
+}
 
 function apptPosition(appt) {
   const [h, m] = (appt.time || `${WORK_START_HOUR}:00`).split(":").map(Number);
@@ -161,6 +174,7 @@ export default function SalonApp() {
   const [appointments, setAppointments] = useState([]);
   const [clients, setClients] = useState([]);
   const [services, setServices] = useState([]);
+  const [employees, setEmployees] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [saveError, setSaveError] = useState(false);
 
@@ -182,8 +196,9 @@ export default function SalonApp() {
     let apptsLoaded = false;
     let clientsLoaded = false;
     let servicesLoaded = false;
+    let employeesLoaded = false;
     const checkLoaded = () => {
-      if (apptsLoaded && clientsLoaded && servicesLoaded) setLoaded(true);
+      if (apptsLoaded && clientsLoaded && servicesLoaded && employeesLoaded) setLoaded(true);
     };
 
     const unsubAppts = onSnapshot(
@@ -246,10 +261,38 @@ export default function SalonApp() {
       }
     );
 
+    let employeesSeeded = false;
+    const unsubEmployees = onSnapshot(
+      collection(db, COLLECTION_EMPLOYEES),
+      (snap) => {
+        if (snap.empty && !employeesSeeded) {
+          // Prvi put — popuni bazu sa Ivana/Bilja/Tamara, sa istim ID-jevima
+          // koje već koriste postojeći termini (appt.staff), da se ne izgubi veza.
+          employeesSeeded = true;
+          SEED_EMPLOYEES.forEach((e) => {
+            const { id, ...rest } = e;
+            setDoc(doc(db, COLLECTION_EMPLOYEES, id), rest).catch(() => {});
+          });
+        } else {
+          setEmployees(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        }
+        setSaveError(false);
+        employeesLoaded = true;
+        checkLoaded();
+      },
+      (err) => {
+        console.error(err);
+        setSaveError(true);
+        employeesLoaded = true;
+        checkLoaded();
+      }
+    );
+
     return () => {
       unsubAppts();
       unsubClients();
       unsubServices();
+      unsubEmployees();
     };
   }, []);
 
@@ -405,7 +448,7 @@ export default function SalonApp() {
   };
 
   return (
-    <div style={styles.appRoot}>
+    <div className="app-root" style={styles.appRoot}>
       <GlobalStyle />
       <Header view={view} setView={setView} saveError={saveError} />
 
@@ -416,6 +459,7 @@ export default function SalonApp() {
       ) : view === "month" ? (
         <MonthView
           appointments={appointments}
+          employees={employees}
           selectedDate={selectedDate}
           setSelectedDate={setSelectedDate}
           onSelectDay={(d) => {
@@ -426,6 +470,7 @@ export default function SalonApp() {
       ) : view === "day" ? (
         <DayTimelineView
           appointments={appointments}
+          employees={employees}
           selectedDate={selectedDate}
           setSelectedDate={setSelectedDate}
           onBack={() => setView("month")}
@@ -437,10 +482,17 @@ export default function SalonApp() {
       ) : view === "clients" ? (
         <ClientsView clients={clients} onSave={saveClient} onDelete={deleteClient} />
       ) : view === "payroll" ? (
-        <PayrollView onLogout={handleLogout} onBack={() => setView("stats")} />
+        <PayrollView
+          appointments={appointments}
+          employees={employees}
+          user={user}
+          onLogout={handleLogout}
+          onBack={() => setView("stats")}
+        />
       ) : (
         <StatsView
           appointments={appointments}
+          employees={employees}
           clients={clients}
           onImportData={handleImportData}
           onOpenPayroll={openPayroll}
@@ -470,6 +522,7 @@ export default function SalonApp() {
           initial={editingAppt}
           prefill={prefill}
           defaultDate={selectedDate}
+          employees={employees}
           services={services}
           onAddService={addService}
           onUpdateService={updateService}
@@ -541,7 +594,7 @@ function Header({ view, setView, saveError }) {
 /* Month view                                                         */
 /* ------------------------------------------------------------------ */
 
-function MonthView({ appointments, selectedDate, setSelectedDate, onSelectDay }) {
+function MonthView({ appointments, employees, selectedDate, setSelectedDate, onSelectDay }) {
   const apptsByDay = useMemo(() => {
     const map = {};
     appointments.forEach((a) => {
@@ -617,10 +670,11 @@ function MonthView({ appointments, selectedDate, setSelectedDate, onSelectDay })
           const inMonth = isSameMonth(d, selectedDate);
           const today = isToday(d);
           const dayAppts = apptsByDay[key] || [];
-          const staffPresent = STAFF.filter((s) => dayAppts.some((a) => a.staff === s.id));
+          const staffPresent = employees.filter((s) => dayAppts.some((a) => a.staff === s.id));
           return (
             <button
               key={i}
+              className="day-cell"
               onClick={() => onSelectDay(d)}
               style={{
                 ...styles.dayCell,
@@ -629,6 +683,7 @@ function MonthView({ appointments, selectedDate, setSelectedDate, onSelectDay })
               }}
             >
               <span style={{ ...styles.dayCellNum, ...(today ? styles.dayCellNumToday : {}) }}>{d.getDate()}</span>
+              <span className="day-cell-name">{DAY_NAMES_SHORT_MON_FIRST[(d.getDay() + 6) % 7]}</span>
               <span style={styles.dayCellDots}>
                 {staffPresent.slice(0, 3).map((s) => (
                   <span key={s.id} style={{ ...styles.dayDot, background: s.color }} />
@@ -647,15 +702,15 @@ function MonthView({ appointments, selectedDate, setSelectedDate, onSelectDay })
 /* ------------------------------------------------------------------ */
 
 function DayTimelineView({
-  appointments, selectedDate, setSelectedDate, onBack, onSlotClick, onEditAppt,
+  appointments, employees, selectedDate, setSelectedDate, onBack, onSlotClick, onEditAppt,
 }) {
   const [staffFilter, setStaffFilter] = useState("all");
   const key = dateKey(selectedDate);
 
   const dayAppts = useMemo(() => appointments.filter((a) => a.date === key), [appointments, key]);
-  const dayTotal = dayAppts.reduce((sum, a) => sum + (Number(a.price) || 0), 0);
+  const dayTotal = dayAppts.reduce((sum, a) => sum + (a.blocked ? 0 : Number(a.price) || 0), 0);
 
-  const columns = staffFilter === "all" ? STAFF : [staffById(staffFilter)];
+  const columns = staffFilter === "all" ? employees : [staffById(staffFilter, employees)];
   const wide = columns.length === 1;
 
   return (
@@ -684,7 +739,7 @@ function DayTimelineView({
 
       <div style={styles.ribbonRow}>
         <RibbonTab label="Svi" active={staffFilter === "all"} color="#8A7368" onClick={() => setStaffFilter("all")} />
-        {STAFF.map((s) => (
+        {employees.map((s) => (
           <RibbonTab key={s.id} label={s.name} active={staffFilter === s.id} color={s.color} onClick={() => setStaffFilter(s.id)} />
         ))}
       </div>
@@ -694,24 +749,29 @@ function DayTimelineView({
         <span style={styles.dayTotalValue}>{formatMoney(dayTotal)}</span>
       </div>
 
-      <div style={styles.timelineOuter}>
-        <div style={styles.timeLabelCol}>
-          {Array.from({ length: TOTAL_SLOTS / 2 + 1 }).map((_, i) => (
-            <div key={i} style={{ ...styles.timeLabel, top: i * 2 * ROW_HEIGHT - 6 }}>
-              {pad2(WORK_START_HOUR + i)}:00
-            </div>
+      <div style={styles.timelineScrollWrap}>
+        <div style={styles.timelineOuter}>
+          <div style={styles.timeLabelCol}>
+            <div style={styles.timeLabelColHeader} />
+            {Array.from({ length: TOTAL_SLOTS + 1 }).map((_, i) => (
+              <div key={i} style={{ ...styles.timeLabel, top: STAFF_HEADER_HEIGHT + i * ROW_HEIGHT }}>
+                {slotLabel(i)}
+              </div>
+            ))}
+          </div>
+          {columns.map((staff) => (
+            <StaffTimelineColumn
+              key={staff.id}
+              staff={staff}
+              appts={dayAppts.filter((a) => a.staff === staff.id)}
+              wide={wide}
+              clickableHeader={staffFilter === "all"}
+              onHeaderClick={() => setStaffFilter(staff.id)}
+              onSlotClick={(time) => onSlotClick(staff.id, time)}
+              onEditAppt={onEditAppt}
+            />
           ))}
         </div>
-        {columns.map((staff) => (
-          <StaffTimelineColumn
-            key={staff.id}
-            staff={staff}
-            appts={dayAppts.filter((a) => a.staff === staff.id)}
-            wide={wide}
-            onSlotClick={(time) => onSlotClick(staff.id, time)}
-            onEditAppt={onEditAppt}
-          />
-        ))}
       </div>
     </div>
   );
@@ -733,10 +793,20 @@ function RibbonTab({ label, active, color, onClick }) {
   );
 }
 
-function StaffTimelineColumn({ staff, appts, wide, onSlotClick, onEditAppt }) {
+function StaffTimelineColumn({ staff, appts, wide, clickableHeader, onHeaderClick, onSlotClick, onEditAppt }) {
   return (
     <div style={styles.staffCol}>
-      <div style={{ ...styles.staffColHeader, background: staff.color }}>{staff.name}</div>
+      {clickableHeader ? (
+        <button
+          style={{ ...styles.staffColHeader, ...styles.staffColHeaderBtn, background: staff.color }}
+          onClick={onHeaderClick}
+          aria-label={`Prikaži samo ${staff.name}`}
+        >
+          {staff.name}
+        </button>
+      ) : (
+        <div style={{ ...styles.staffColHeader, background: staff.color }}>{staff.name}</div>
+      )}
       <div style={styles.staffColBody}>
         {Array.from({ length: TOTAL_SLOTS }).map((_, i) => (
           <button
@@ -746,7 +816,7 @@ function StaffTimelineColumn({ staff, appts, wide, onSlotClick, onEditAppt }) {
               ...styles.slotBtn,
               top: i * ROW_HEIGHT,
               height: ROW_HEIGHT,
-              borderTop: i % 2 === 0 ? "1px solid #E8DCC8" : "1px dashed #F0E6D6",
+              borderTop: i % 2 === 0 ? "1px solid #D9C4A8" : "1px dashed #E3D4BD",
             }}
             aria-label={`Zakaži u ${slotLabel(i)}`}
           />
@@ -761,14 +831,22 @@ function StaffTimelineColumn({ staff, appts, wide, onSlotClick, onEditAppt }) {
               style={{
                 ...styles.apptBlock,
                 top: pos.top,
-                height: pos.height,
-                background: staff.color,
+                height: Math.max(pos.height - 3, 16),
+                background: a.blocked ? undefined : staff.color,
+                ...(a.blocked ? styles.apptBlockBlocked : {}),
               }}
             >
-              <span style={styles.apptBlockService}>{a.service}</span>
-              {a.client && <span style={styles.apptBlockClient}>{a.client}</span>}
-              {wide && (
-                <span style={styles.apptBlockPrice}>{hasPrice ? formatMoney(a.price) : "Nije naplaćeno"}</span>
+              {a.blocked ? (
+                <>
+                  <span style={styles.apptBlockService}>🚫 Blokirano</span>
+                  {a.client && <span style={styles.apptBlockClient}>{a.client}</span>}
+                </>
+              ) : (
+                <>
+                  <span style={styles.apptBlockService}>{a.service}</span>
+                  {a.client && <span style={styles.apptBlockClient}>{a.client}</span>}
+                  <span style={styles.apptBlockPrice}>{hasPrice ? formatMoney(a.price) : "Nije naplaćeno"}</span>
+                </>
               )}
             </button>
           );
@@ -783,7 +861,7 @@ function StaffTimelineColumn({ staff, appts, wide, onSlotClick, onEditAppt }) {
 /* ------------------------------------------------------------------ */
 
 function ApptForm({
-  initial, prefill, defaultDate, services, onAddService, onUpdateService, onDeleteService,
+  initial, prefill, defaultDate, employees, services, onAddService, onUpdateService, onDeleteService,
   clients, onSaveClientNote, onClose, onSave, onDelete,
 }) {
   const [date, setDate] = useState(initial?.date || prefill?.date || dateKey(defaultDate));
@@ -791,7 +869,7 @@ function ApptForm({
   const [useCustomTime, setUseCustomTime] = useState(
     initial ? !TIME_OPTIONS.includes(initial.time) : prefill ? !TIME_OPTIONS.includes(prefill.time) : false
   );
-  const [staff, setStaff] = useState(initial?.staff || prefill?.staff || "ivana");
+  const [staff, setStaff] = useState(initial?.staff || prefill?.staff || employees[0]?.id || "ivana");
   const isKnownService = (name) => services.some((s) => s.name === name);
   const [service, setService] = useState(
     !initial || isKnownService(initial.service) ? initial?.service || services[0]?.name || "" : services[0]?.name || ""
@@ -811,8 +889,9 @@ function ApptForm({
   const [duration, setDuration] = useState(
     initial?.duration ?? services.find((s) => s.name === (initial?.service || service))?.duration ?? 30
   );
+  const [blocked, setBlocked] = useState(initial?.blocked || false);
 
-  const canSave = date && (useCustom ? customService.trim() : service);
+  const canSave = date && (blocked || (useCustom ? customService.trim() : service));
 
   const matchedClient = useMemo(() => {
     const name = client.trim().toLowerCase();
@@ -842,10 +921,11 @@ function ApptForm({
       date,
       time,
       staff,
-      service: useCustom ? customService.trim() : service,
+      service: blocked ? "Blokirano" : useCustom ? customService.trim() : service,
       client: client.trim(),
-      price: price === "" ? "" : Number(price),
+      price: blocked ? "" : price === "" ? "" : Number(price),
       duration: Number(duration) || 30,
+      blocked,
     });
   };
 
@@ -886,7 +966,7 @@ function ApptForm({
           <div style={styles.fieldRow}>
             <label style={styles.label}>Radi kod</label>
             <div style={styles.staffChoiceRow}>
-              {STAFF.map((s) => (
+              {employees.map((s) => (
                 <button
                   key={s.id}
                   onClick={() => setStaff(s.id)}
@@ -903,6 +983,14 @@ function ApptForm({
             </div>
           </div>
 
+          <div style={styles.fieldRow}>
+            <label style={styles.blockedCheckRow}>
+              <input type="checkbox" checked={blocked} onChange={(e) => setBlocked(e.target.checked)} />
+              <span>🚫 Blokiran termin (nedostupno za zakazivanje)</span>
+            </label>
+          </div>
+
+          {!blocked && (
           <div style={styles.fieldRow}>
             <label style={styles.label}>Usluga</label>
             {!useCustom ? (
@@ -931,6 +1019,7 @@ function ApptForm({
               {useCustom ? "Izaberi sa liste" : "Nema na listi — upiši drugu uslugu"}
             </button>
           </div>
+          )}
 
           <div style={styles.fieldRowHalf}>
             <div style={styles.fieldRow}>
@@ -944,6 +1033,7 @@ function ApptForm({
                 style={styles.input}
               />
             </div>
+            {!blocked && (
             <div style={styles.fieldRow}>
               <label style={styles.label}>Naplaćeno (din)</label>
               <input
@@ -956,25 +1046,28 @@ function ApptForm({
                 style={styles.input}
               />
             </div>
+            )}
           </div>
 
           <div style={styles.fieldRow}>
-            <label style={styles.label}>Klijent (opciono)</label>
+            <label style={styles.label}>{blocked ? "Napomena (opciono)" : "Klijent (opciono)"}</label>
             <input
               type="text"
-              list="clients-datalist"
+              list={blocked ? undefined : "clients-datalist"}
               value={client}
               onChange={(e) => handleClientChange(e.target.value)}
-              placeholder="Ime klijenta"
+              placeholder={blocked ? "npr. godišnji odmor, pauza…" : "Ime klijenta"}
               style={styles.input}
             />
+            {!blocked && (
             <datalist id="clients-datalist">
               {clients.map((c) => (
                 <option key={c.id} value={c.name} />
               ))}
             </datalist>
+            )}
 
-            {client.trim() && !editingNote && (
+            {!blocked && client.trim() && !editingNote && (
               <div style={styles.clientNoteBox}>
                 {matchedClient?.phone && <p style={styles.clientPhoneText}>{matchedClient.phone}</p>}
                 {matchedClient ? (
@@ -999,7 +1092,7 @@ function ApptForm({
               </div>
             )}
 
-            {client.trim() && editingNote && (
+            {!blocked && client.trim() && editingNote && (
               <div style={styles.clientNoteBox}>
                 <input
                   type="tel"
@@ -1314,6 +1407,7 @@ function ClientForm({ initial, onClose, onSave, onDelete }) {
 
 /* ------------------------------------------------------------------ */
 const PERIODS = [
+  { id: "day", label: "Danas" },
   { id: "week", label: "Ova nedelja" },
   { id: "month", label: "Ovaj mesec" },
   { id: "all", label: "Sve vreme" },
@@ -1381,35 +1475,11 @@ function LoginModal({ onClose, onLogin, error, loading }) {
   );
 }
 
-function PayrollView({ onLogout, onBack }) {
-  return (
-    <div style={styles.payrollWrap}>
-      <button style={styles.backLink} onClick={onBack}>
-        <ChevronLeft size={15} />
-        <span>Statistika</span>
-      </button>
-      <div style={styles.payrollCard}>
-        <Lock size={26} color="#C4914B" />
-        <div style={styles.payrollTitle}>Obračun zarada</div>
-        <p style={styles.payrollText}>
-          Ova stranica je vidljiva samo prijavljenom korisniku. Ovde ćemo dodati obračun
-          zarada po dogovorenim formulama za Ivanu, Bilju i Tamaru — javi šta sve treba
-          da se računa i prikazuje pa nastavljamo.
-        </p>
-      </div>
-      <button style={styles.logoutBtn} onClick={onLogout}>
-        <LogOut size={15} />
-        <span>Odjavi se</span>
-      </button>
-    </div>
-  );
-}
-
 /* ------------------------------------------------------------------ */
 /* Stats view                                                          */
 /* ------------------------------------------------------------------ */
 
-function StatsView({ appointments, clients, onImportData, onOpenPayroll }) {
+function StatsView({ appointments, employees, clients, onImportData, onOpenPayroll }) {
   const fileInputRef = useRef(null);
   const [period, setPeriod] = useState("month");
   const [customFrom, setCustomFrom] = useState(dateKey(startOfMonth(new Date())));
@@ -1417,6 +1487,7 @@ function StatsView({ appointments, clients, onImportData, onOpenPayroll }) {
 
   const range = useMemo(() => {
     const today = new Date();
+    if (period === "day") return { from: today, to: today };
     if (period === "week") return { from: startOfWeek(today), to: addDays(startOfWeek(today), 6) };
     if (period === "month") return { from: startOfMonth(today), to: endOfMonth(today) };
     if (period === "custom") return { from: parseDateKey(customFrom), to: parseDateKey(customTo) };
@@ -1434,7 +1505,7 @@ function StatsView({ appointments, clients, onImportData, onOpenPayroll }) {
   const totalRevenue = paid.reduce((s, a) => s + Number(a.price), 0);
   const avgPrice = paid.length ? Math.round(totalRevenue / paid.length) : 0;
 
-  const staffStats = STAFF.map((s) => {
+  const staffStats = employees.map((s) => {
     const mine = paid.filter((a) => a.staff === s.id);
     return {
       name: s.name,
@@ -1463,6 +1534,30 @@ function StatsView({ appointments, clients, onImportData, onOpenPayroll }) {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  };
+
+  const handleExportExcel = () => {
+    const apptRows = appointments
+      .slice()
+      .sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")))
+      .map((a) => ({
+        Datum: a.date,
+        Vreme: a.time || "",
+        Radnik: staffById(a.staff, employees).name,
+        Usluga: a.service,
+        "Trajanje (min)": a.duration || "",
+        Klijent: a.client || "",
+        "Naplaćeno (din)": a.price === "" || a.price === undefined || a.price === null ? "" : Number(a.price),
+      }));
+    const clientRows = clients
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name, "sr"))
+      .map((c) => ({ Ime: c.name, Telefon: c.phone || "", Receptura: c.note || "" }));
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(apptRows), "Zakazivanja");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(clientRows), "Klijenti");
+    XLSX.writeFile(wb, `salon-bekap-${dateKey(new Date())}.xlsx`);
   };
 
   const handleImportClick = () => fileInputRef.current && fileInputRef.current.click();
@@ -1598,7 +1693,11 @@ function StatsView({ appointments, clients, onImportData, onOpenPayroll }) {
         <div style={styles.backupBtnRow}>
           <button style={styles.backupBtn} onClick={handleExport}>
             <Download size={15} />
-            <span>Izvezi bekap</span>
+            <span>Izvezi bekap (.json)</span>
+          </button>
+          <button style={styles.backupBtn} onClick={handleExportExcel}>
+            <Download size={15} />
+            <span>Izvezi u Excel (.xlsx)</span>
           </button>
           <button style={styles.backupBtn} onClick={handleImportClick}>
             <Upload size={15} />
@@ -1639,11 +1738,22 @@ function GlobalStyle() {
     <style>{`
       @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Work+Sans:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap');
       * { box-sizing: border-box; }
+      html, body, #root { height: 100%; margin: 0; background: #FBF6EE; }
       button { font-family: inherit; cursor: pointer; }
       input, select { font-family: inherit; }
       input[type="date"]::-webkit-calendar-picker-indicator,
       input[type="time"]::-webkit-calendar-picker-indicator {
         filter: invert(28%) sepia(15%) saturate(1000%) hue-rotate(310deg);
+      }
+
+      .app-root { max-width: 560px; margin: 0 auto; min-height: 100vh; }
+      .day-cell { aspect-ratio: 1; }
+      .day-cell-name { display: none; }
+
+      @media (min-width: 900px) {
+        .app-root { max-width: 1100px; }
+        .day-cell { aspect-ratio: 4 / 3; }
+        .day-cell-name { display: block; font-size: 11px; color: #B4A296; margin-top: 2px; }
       }
     `}</style>
   );
@@ -1659,8 +1769,8 @@ const FONT_MONO = "'JetBrains Mono', monospace";
 
 const styles = {
   appRoot: {
-    fontFamily: FONT_BODY, background: "#FBF6EE", minHeight: "100%", color: "#2B1B1F",
-    maxWidth: 560, margin: "0 auto", position: "relative", paddingBottom: 90,
+    fontFamily: FONT_BODY, background: "#FBF6EE", color: "#2B1B1F",
+    position: "relative", paddingBottom: 90,
   },
   loadingWrap: { padding: 48, textAlign: "center" },
   loadingText: { color: "#8A7368", fontSize: 14 },
@@ -1698,7 +1808,7 @@ const styles = {
 
   monthGrid: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 },
   dayCell: {
-    aspectRatio: "1", border: "1px solid #EFE3D0", background: "#FFFDF9", borderRadius: 9,
+    border: "1px solid #EFE3D0", background: "#FFFDF9", borderRadius: 9,
     display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
     padding: "4px 2px", gap: 3, position: "relative",
   },
@@ -1727,21 +1837,29 @@ const styles = {
   dayTotalLabel: { fontSize: 12.5, color: "#8A7368" },
   dayTotalValue: { fontFamily: FONT_MONO, fontSize: 15, fontWeight: 500, color: "#7A2E3D" },
 
-  timelineOuter: { display: "flex", marginTop: 10, position: "relative" },
-  timeLabelCol: { width: 42, flexShrink: 0, position: "relative", height: TIMELINE_HEIGHT },
-  timeLabel: { position: "absolute", left: 0, fontSize: 10.5, color: "#B4A296", fontFamily: FONT_MONO },
+  timelineScrollWrap: { maxHeight: "min(640px, calc(100vh - 320px))", overflowY: "auto", marginTop: 10, borderRadius: 8 },
+  timelineOuter: { display: "flex", position: "relative", gap: 6 },
+  timeLabelCol: { width: 42, flexShrink: 0, position: "relative", height: STAFF_HEADER_HEIGHT + TIMELINE_HEIGHT },
+  timeLabelColHeader: { height: STAFF_HEADER_HEIGHT, position: "sticky", top: 0, background: "#FBF6EE", zIndex: 6 },
+  timeLabel: { position: "absolute", left: 0, fontSize: 10.5, color: "#B4A296", fontFamily: FONT_MONO, lineHeight: 1 },
 
-  staffCol: { flex: 1, minWidth: 0, borderLeft: "1px solid #EFE3D0" },
+  staffCol: { flex: 1, minWidth: 0 },
   staffColHeader: {
     fontSize: 11, fontWeight: 600, color: "#FBF6EE", textAlign: "center",
-    padding: "4px 2px", borderRadius: "6px 6px 0 0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+    height: STAFF_HEADER_HEIGHT, display: "flex", alignItems: "center", justifyContent: "center",
+    borderRadius: "6px 6px 0 0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+    position: "sticky", top: 0, zIndex: 6,
   },
-  staffColBody: { position: "relative", height: TIMELINE_HEIGHT, background: "#FFFDF9" },
+  staffColHeaderBtn: { width: "100%", border: "none", cursor: "pointer" },
+  staffColBody: { position: "relative", height: TIMELINE_HEIGHT, background: "#FFFDF9", borderLeft: "1px solid #EFE3D0" },
   slotBtn: { position: "absolute", left: 0, right: 0, border: "none", background: "transparent", padding: 0 },
   apptBlock: {
-    position: "absolute", left: 2, right: 2, borderRadius: 6, border: "none",
+    position: "absolute", left: 2, right: 2, borderRadius: 6, border: "1px solid rgba(255,255,255,0.4)",
     padding: "3px 5px", display: "flex", flexDirection: "column", alignItems: "flex-start",
-    overflow: "hidden", textAlign: "left", boxShadow: "0 2px 4px rgba(43,27,31,0.18)", zIndex: 2,
+    overflow: "hidden", textAlign: "left", boxShadow: "0 2px 4px rgba(43,27,31,0.22)", zIndex: 2,
+  },
+  apptBlockBlocked: {
+    background: "repeating-linear-gradient(45deg, #A8927F, #A8927F 6px, #96806D 6px, #96806D 12px)",
   },
   apptBlockService: { fontSize: 11, fontWeight: 700, color: "#FBF6EE", lineHeight: 1.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" },
   apptBlockClient: { fontSize: 10.5, color: "rgba(251,246,238,0.9)", lineHeight: 1.2 },
@@ -1774,6 +1892,7 @@ const styles = {
     background: "#FFFDF9", fontSize: 14.5, color: "#2B1B1F",
   },
   staffChoiceRow: { display: "flex", gap: 8 },
+  blockedCheckRow: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#5A473F", cursor: "pointer" },
   staffChoiceBtn: { flex: 1, padding: "9px 4px", borderRadius: 8, border: "1.5px solid", fontSize: 13, fontWeight: 600 },
   linkToggle: { border: "none", background: "none", color: "#7A2E3D", fontSize: 12, textDecoration: "underline", padding: "6px 0 0", textAlign: "left" },
 

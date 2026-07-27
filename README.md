@@ -28,6 +28,53 @@ Claude-ovog ugrađenog skladišta — zato može da se hostuje potpuno besplatno
 5. Skroluj do sekcije **"Your apps"** → klikni ikonicu **`</>`** (Web app).
 6. Daj aplikaciji ime (npr. "salon-web") → **Register app**.
 7. Firebase će ti prikazati kod sa konfiguracijom — kopiraj te vrednosti (`apiKey`, `authDomain`, `projectId`...) i zalepi ih u fajl **`src/firebase.js`** u ovom projektu, umesto placeholder teksta.
+8. Uključi prijavu za "Obračun zarada": u levom meniju **Build → Authentication → "Get started"** →
+   izaberi **"Email/Password"** sa liste provajdera → uključi (toggle) → **Save**.
+9. U istom delu (Authentication), otvori tab **"Users"** → **"Add user"** → upiši svoj email i
+   šifru koju ćeš koristiti za pristup obračunu zarada. To je jedini nalog koji postoji — nema
+   registracije, samo taj jedan login koji ti praviš ručno ovde.
+10. Uključi skladište za PDF dokumente: u levom meniju **Build → Storage → "Get started"** →
+    prihvati podrazumeva podešavanja ("Start in test mode") → izaberi istu lokaciju kao za Firestore.
+
+---
+
+## Korak 1b — Preporučena bezbednosna pravila (posle Koraka 10)
+
+Pošto sada čuvamo i podatke o zaradama, preporučujem da odmah podesiš Firestore i Storage
+pravila da samo prijavljeni nalog (ti) može da čita/menja obračune — dok ostatak aplikacije
+(zakazivanja, klijenti, usluge) ostaje otvoren za sve troje, bez prijave.
+
+U Firebase konzoli: **Firestore Database → Rules**, zameni sadržaj sa:
+
+```
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /payrollRuns/{docId} {
+      allow read, write: if request.auth != null;
+    }
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}
+```
+
+U **Storage → Rules**, zameni sa:
+
+```
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /payroll/{allPaths=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
+```
+
+Klikni **Publish** posle izmene. (Ako ovo preskočiš, sve i dalje radi — samo je manje bezbedno,
+slično kao i ostatak aplikacije dok je u "test mode".)
 
 ---
 
@@ -113,6 +160,19 @@ ali ima jednu razliku: Firestore test-mode dozvola **ističe posle 30 dana** i m
 
 Ako želite dodatnu zaštitu (npr. jednostavan PIN kod pri otvaranju aplikacije), to je moguće
 naknadno dodati — samo javi.
+
+**Napomena o "Obračun" dugmetu:** prijava (email + šifra) sada štiti samo tu jednu stranicu u
+aplikaciji (niko bez prijave je ne vidi). Kad budemo dodavali stvarne brojke obračuna zarada,
+treba još i u Firestore Rules zaključati tu konkretnu kolekciju podataka da samo prijavljeni
+nalog može da je čita/menja — podsetiću te na to kad budemo radili taj deo.
+
+**Napomena o Firebase Storage (PDF dokumenti):** Google trenutno zahteva da projekat bude na
+plaćenom ("Blaze") planu da bi se Storage uopšte mogao uključiti — čak i ako se u praksi ništa
+ne naplati na ovoj veličini korišćenja (Blaze i dalje ima besplatni mesečni limit, samo traži
+da kartica bude povezana). Dok se ne odluči da li i kada preći na Blaze, aplikacija radi bez
+problema: klikom na "Zaključi mesec", ako Storage nije dostupan, PDF-ovi se automatski preuzimaju
+direktno na računar umesto da se otpremaju u Storage, a sam obračun (brojevi, kartice, istorija)
+se i dalje trajno čuva u Firestore-u kao i inače.
 
 ---
 
