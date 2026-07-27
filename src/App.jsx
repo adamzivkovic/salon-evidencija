@@ -144,15 +144,8 @@ function slotLabel(i) {
   return `${pad2(h)}:${pad2(m)}`;
 }
 
-// 10:00, 10:10, 10:20 ... 20:00 — za padajući meni u formi zakazivanja
-// (nezavisno od 30-minutne mreže na vremenskoj osi, koja ostaje za pregled)
-const TIME_OPTIONS = [];
-for (let h = WORK_START_HOUR; h <= WORK_END_HOUR; h++) {
-  for (let m = 0; m < 60; m += 10) {
-    if (h === WORK_END_HOUR && m > 0) break;
-    TIME_OPTIONS.push(`${pad2(h)}:${pad2(m)}`);
-  }
-}
+// 10:00, 10:30, 11:00 ... 20:00 — za padajući meni u formi zakazivanja
+const TIME_OPTIONS = Array.from({ length: TOTAL_SLOTS + 1 }, (_, i) => slotLabel(i));
 
 function apptPosition(appt) {
   const [h, m] = (appt.time || `${WORK_START_HOUR}:00`).split(":").map(Number);
@@ -164,6 +157,33 @@ function apptPosition(appt) {
     top: (start / 30) * ROW_HEIGHT,
     height: Math.max(((end - start) / 30) * ROW_HEIGHT, 18),
   };
+}
+
+function genId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function timeToMinutes(t) {
+  const [h, m] = (t || "0:0").split(":").map(Number);
+  return h * 60 + (m || 0);
+}
+
+// Da li se dati termin (radnik+datum+vreme+trajanje) vremenski preklapa sa
+// nekim postojećim terminom istog radnika. Ne uzima u obzir blokirane
+// termine drugih radnika niti prazne "pauze" — samo stvarne sudare.
+function findOverlap(appointments, staffId, date, time, duration, excludeId) {
+  if (!time) return null;
+  const start = timeToMinutes(time);
+  const end = start + (Number(duration) || 0);
+  return (
+    appointments.find((a) => {
+      if (a.id === excludeId) return false;
+      if (a.staff !== staffId || a.date !== date || !a.time) return false;
+      const s2 = timeToMinutes(a.time);
+      const e2 = s2 + (Number(a.duration) || 30);
+      return start < e2 && s2 < end;
+    }) || null
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -522,6 +542,7 @@ export default function SalonApp() {
           initial={editingAppt}
           prefill={prefill}
           defaultDate={selectedDate}
+          appointments={appointments}
           employees={employees}
           services={services}
           onAddService={addService}
@@ -531,8 +552,20 @@ export default function SalonApp() {
           onSaveClientNote={(name, phone, note) => saveClient(null, name, phone, note)}
           onClose={closeForm}
           onSave={(data) => {
-            if (editingAppt) updateAppointment(editingAppt.id, data);
-            else addAppointment(data);
+            const { linkToId, ...apptData } = data;
+            if (editingAppt) {
+              updateAppointment(editingAppt.id, apptData);
+            } else {
+              let groupId = null;
+              if (linkToId) {
+                const target = appointments.find((a) => a.id === linkToId);
+                if (target) {
+                  groupId = target.groupId || genId();
+                  if (!target.groupId) updateAppointment(target.id, { groupId });
+                }
+              }
+              addAppointment({ ...apptData, groupId });
+            }
             closeForm();
           }}
           onDelete={
@@ -794,6 +827,28 @@ function RibbonTab({ label, active, color, onClick }) {
 }
 
 function StaffTimelineColumn({ staff, appts, wide, clickableHeader, onHeaderClick, onSlotClick, onEditAppt }) {
+  const connectors = useMemo(() => {
+    const byGroup = {};
+    appts.forEach((a) => {
+      if (!a.groupId) return;
+      if (!byGroup[a.groupId]) byGroup[a.groupId] = [];
+      byGroup[a.groupId].push(a);
+    });
+    const gaps = [];
+    Object.values(byGroup).forEach((group) => {
+      if (group.length < 2) return;
+      const sorted = group.slice().sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+      for (let i = 0; i < sorted.length - 1; i++) {
+        const posA = apptPosition(sorted[i]);
+        const posB = apptPosition(sorted[i + 1]);
+        const top = posA.top + posA.height;
+        const height = posB.top - top;
+        if (height > 6) gaps.push({ key: `${sorted[i].id}-${sorted[i + 1].id}`, top, height });
+      }
+    });
+    return gaps;
+  }, [appts]);
+
   return (
     <div style={styles.staffCol}>
       {clickableHeader ? (
@@ -821,6 +876,11 @@ function StaffTimelineColumn({ staff, appts, wide, clickableHeader, onHeaderClic
             aria-label={`Zakaži u ${slotLabel(i)}`}
           />
         ))}
+        {connectors.map((c) => (
+          <div key={c.key} style={{ ...styles.groupConnector, top: c.top, height: c.height }}>
+            {c.height > 22 && <span style={styles.groupConnectorLabel}>pauza</span>}
+          </div>
+        ))}
         {appts.map((a) => {
           const pos = apptPosition(a);
           const hasPrice = a.price !== "" && a.price !== null && a.price !== undefined && !isNaN(a.price);
@@ -843,7 +903,7 @@ function StaffTimelineColumn({ staff, appts, wide, clickableHeader, onHeaderClic
                 </>
               ) : (
                 <>
-                  <span style={styles.apptBlockService}>{a.service}</span>
+                  <span style={styles.apptBlockService}>{a.groupId ? "🔗 " : ""}{a.service}</span>
                   {a.client && <span style={styles.apptBlockClient}>{a.client}</span>}
                   <span style={styles.apptBlockPrice}>{hasPrice ? formatMoney(a.price) : "Nije naplaćeno"}</span>
                 </>
@@ -861,7 +921,7 @@ function StaffTimelineColumn({ staff, appts, wide, clickableHeader, onHeaderClic
 /* ------------------------------------------------------------------ */
 
 function ApptForm({
-  initial, prefill, defaultDate, employees, services, onAddService, onUpdateService, onDeleteService,
+  initial, prefill, defaultDate, appointments, employees, services, onAddService, onUpdateService, onDeleteService,
   clients, onSaveClientNote, onClose, onSave, onDelete,
 }) {
   const [date, setDate] = useState(initial?.date || prefill?.date || dateKey(defaultDate));
@@ -890,6 +950,8 @@ function ApptForm({
     initial?.duration ?? services.find((s) => s.name === (initial?.service || service))?.duration ?? 30
   );
   const [blocked, setBlocked] = useState(initial?.blocked || false);
+  const [isContinuation, setIsContinuation] = useState(false);
+  const [linkToId, setLinkToId] = useState("");
 
   const canSave = date && (blocked || (useCustom ? customService.trim() : service));
 
@@ -898,6 +960,21 @@ function ApptForm({
     if (!name) return null;
     return clients.find((c) => c.name.toLowerCase() === name) || null;
   }, [client, clients]);
+
+  // Termini istog radnika, istog dana, koji bi mogli biti "prvi deo" ove usluge
+  // (npr. nanošenje boje pre pauze) — nudi se samo pri kreiranju novog termina.
+  const linkCandidates = useMemo(() => {
+    if (initial) return [];
+    return appointments
+      .filter((a) => a.staff === staff && a.date === date && !a.blocked)
+      .slice()
+      .sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+  }, [appointments, staff, date, initial]);
+
+  const overlap = useMemo(
+    () => findOverlap(appointments, staff, date, time, duration, initial?.id),
+    [appointments, staff, date, time, duration, initial]
+  );
 
   const handleServiceChange = (name) => {
     setService(name);
@@ -926,6 +1003,7 @@ function ApptForm({
       price: blocked ? "" : price === "" ? "" : Number(price),
       duration: Number(duration) || 30,
       blocked,
+      linkToId: isContinuation && linkToId ? linkToId : null,
     });
   };
 
@@ -963,6 +1041,14 @@ function ApptForm({
             </div>
           </div>
 
+          {overlap && (
+            <p style={styles.overlapWarning}>
+              ⚠️ Preklapa se sa terminom: {overlap.blocked ? "Blokirano" : overlap.service} u {overlap.time}
+              {overlap.client ? ` (${overlap.client})` : ""}. Ako je ovo namerno (npr. nastavak iste
+              usluge), koristi opciju "Nastavak ranijeg termina" ispod.
+            </p>
+          )}
+
           <div style={styles.fieldRow}>
             <label style={styles.label}>Radi kod</label>
             <div style={styles.staffChoiceRow}>
@@ -989,6 +1075,37 @@ function ApptForm({
               <span>🚫 Blokiran termin (nedostupno za zakazivanje)</span>
             </label>
           </div>
+
+          {!initial && !blocked && linkCandidates.length > 0 && (
+            <div style={styles.fieldRow}>
+              <label style={styles.blockedCheckRow}>
+                <input
+                  type="checkbox"
+                  checked={isContinuation}
+                  onChange={(e) => {
+                    setIsContinuation(e.target.checked);
+                    if (!e.target.checked) setLinkToId("");
+                  }}
+                />
+                <span>🔗 Nastavak ranijeg termina (npr. posle pauze)</span>
+              </label>
+              {isContinuation && (
+                <select value={linkToId} onChange={(e) => setLinkToId(e.target.value)} style={{ ...styles.input, marginTop: 8 }}>
+                  <option value="">Izaberi termin na koji se nastavlja…</option>
+                  {linkCandidates.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.time} — {a.service}{a.client ? ` (${a.client})` : ""}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <p style={styles.linkHint}>
+                Poveži ovaj termin sa ranijim da bi se na vremenskoj osi prikazali kao jedna
+                povezana usluga sa pauzom — a taj slobodan prostor između njih i dalje može da se
+                zakaže za nekog drugog.
+              </p>
+            </div>
+          )}
 
           {!blocked && (
           <div style={styles.fieldRow}>
@@ -1027,7 +1144,7 @@ function ApptForm({
               <input
                 type="number"
                 min="5"
-                step="5"
+                step="10"
                 value={duration}
                 onChange={(e) => setDuration(e.target.value)}
                 style={styles.input}
@@ -1864,6 +1981,15 @@ const styles = {
   apptBlockService: { fontSize: 11, fontWeight: 700, color: "#FBF6EE", lineHeight: 1.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" },
   apptBlockClient: { fontSize: 10.5, color: "rgba(251,246,238,0.9)", lineHeight: 1.2 },
   apptBlockPrice: { fontFamily: FONT_MONO, fontSize: 10, color: "rgba(251,246,238,0.95)", marginTop: 2 },
+  groupConnector: {
+    position: "absolute", left: "50%", width: 0, borderLeft: "2px dashed #B99A4D",
+    transform: "translateX(-50%)", pointerEvents: "none", zIndex: 1,
+    display: "flex", alignItems: "center", justifyContent: "center",
+  },
+  groupConnectorLabel: {
+    fontSize: 9, color: "#8A6216", background: "#FBF3E4", padding: "1px 4px",
+    borderRadius: 4, transform: "translateX(6px)", whiteSpace: "nowrap",
+  },
 
   fab: {
     position: "fixed", bottom: 24, right: "max(24px, calc(50% - 256px))",
@@ -1893,6 +2019,11 @@ const styles = {
   },
   staffChoiceRow: { display: "flex", gap: 8 },
   blockedCheckRow: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#5A473F", cursor: "pointer" },
+  overlapWarning: {
+    fontSize: 12, color: "#8A6216", background: "#FBF3E4", border: "1px solid #E8D2A0",
+    borderRadius: 8, padding: "9px 12px", margin: "-6px 0 16px", lineHeight: 1.5,
+  },
+  linkHint: { fontSize: 11.5, color: "#B4A296", marginTop: 8, lineHeight: 1.5 },
   staffChoiceBtn: { flex: 1, padding: "9px 4px", borderRadius: 8, border: "1.5px solid", fontSize: 13, fontWeight: 600 },
   linkToggle: { border: "none", background: "none", color: "#7A2E3D", fontSize: 12, textDecoration: "underline", padding: "6px 0 0", textAlign: "left" },
 
