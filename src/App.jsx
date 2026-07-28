@@ -8,7 +8,7 @@ import PayrollView from "./payroll/PayrollView.jsx";
 import * as XLSX from "xlsx";
 import PinGate from "./PinGate.jsx";
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList,
 } from "recharts";
 import {
   Plus, X, ChevronLeft, ChevronRight, Scissors, Trash2,
@@ -402,6 +402,9 @@ export default function SalonApp() {
       setSaveError(true);
     });
   };
+  const moveAppointment = (id, newStaff, newTime) => {
+    updateAppointment(id, { staff: newStaff, time: newTime });
+  };
 
   /* ---- client CRUD ---- */
   const saveClient = useCallback(
@@ -543,6 +546,7 @@ export default function SalonApp() {
             openNewForm({ date: dateKey(selectedDate), time, staff: staffId })
           }
           onEditAppt={openEditForm}
+          onMoveAppt={moveAppointment}
         />
       ) : view === "clients" ? (
         <ClientsView clients={clients} onSave={saveClient} onDelete={deleteClient} />
@@ -675,6 +679,7 @@ function Header({ view, setView, saveError }) {
 /* ------------------------------------------------------------------ */
 
 function MonthView({ appointments, employees, selectedDate, setSelectedDate, onSelectDay }) {
+  const [staffFilter, setStaffFilter] = useState("all");
   const apptsByDay = useMemo(() => {
     const map = {};
     appointments.forEach((a) => {
@@ -738,6 +743,13 @@ function MonthView({ appointments, employees, selectedDate, setSelectedDate, onS
 
       <div style={styles.swipeHint}>Prevuci levo ili desno za promenu meseca</div>
 
+      <div style={styles.ribbonRow}>
+        <RibbonTab label="Svi" active={staffFilter === "all"} color="#8A7368" onClick={() => setStaffFilter("all")} />
+        {employees.map((s) => (
+          <RibbonTab key={s.id} label={s.name} active={staffFilter === s.id} color={s.color} onClick={() => setStaffFilter(s.id)} />
+        ))}
+      </div>
+
       <div style={styles.weekdayRow}>
         {DAY_NAMES_SHORT_MON_FIRST.map((d) => (
           <div key={d} style={styles.weekdayCell}>{d}</div>
@@ -750,7 +762,9 @@ function MonthView({ appointments, employees, selectedDate, setSelectedDate, onS
           const inMonth = isSameMonth(d, selectedDate);
           const today = isToday(d);
           const dayAppts = apptsByDay[key] || [];
-          const staffPresent = employees.filter((s) => dayAppts.some((a) => a.staff === s.id));
+          const staffPresent = employees.filter(
+            (s) => (staffFilter === "all" || s.id === staffFilter) && dayAppts.some((a) => a.staff === s.id)
+          );
           return (
             <button
               key={i}
@@ -784,6 +798,17 @@ function MonthView({ appointments, employees, selectedDate, setSelectedDate, onS
 // Prati da li je ekran "desktop" širine (isti prag kao CSS media query za
 // .app-root) — koristi se da odlučimo da li ime klijenta staje u zagradi
 // pored usluge na vremenskoj osi.
+// ESC zatvara otvoren modal/prozor (radi kao klik na Otkaži/X).
+function useEscapeToClose(onClose) {
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+}
+
 function useIsDesktop() {
   const [isDesktop, setIsDesktop] = useState(() => typeof window !== "undefined" && window.innerWidth >= 900);
   useEffect(() => {
@@ -795,7 +820,7 @@ function useIsDesktop() {
 }
 
 function DayTimelineView({
-  appointments, employees, selectedDate, setSelectedDate, onBack, onSlotClick, onEditAppt,
+  appointments, employees, selectedDate, setSelectedDate, onBack, onSlotClick, onEditAppt, onMoveAppt,
 }) {
   const [staffFilter, setStaffFilter] = useState("all");
   const isDesktop = useIsDesktop();
@@ -806,6 +831,27 @@ function DayTimelineView({
 
   const columns = staffFilter === "all" ? employees : [staffById(staffFilter, employees)];
   const wide = columns.length === 1;
+
+  const [pendingMove, setPendingMove] = useState(null); // { apptId, sourceAppt, targetStaffId, targetTime }
+
+  const handleDropOnSlot = (targetStaffId, targetTime, apptId) => {
+    if (!apptId) return;
+    const sourceAppt = dayAppts.find((a) => a.id === apptId);
+    if (!sourceAppt) return;
+    if (sourceAppt.staff === targetStaffId && sourceAppt.time === targetTime) return; // ista pozicija, ništa se ne menja
+
+    const conflict = findOverlap(appointments, targetStaffId, key, targetTime, sourceAppt.duration, apptId);
+    if (conflict) {
+      window.alert(`Taj termin nije slobodan — preklapa se sa "${conflict.blocked ? "Blokirano" : conflict.service}" u ${conflict.time}.`);
+      return;
+    }
+    setPendingMove({ apptId, sourceAppt, targetStaffId, targetTime });
+  };
+
+  const confirmMove = () => {
+    if (pendingMove) onMoveAppt(pendingMove.apptId, pendingMove.targetStaffId, pendingMove.targetTime);
+    setPendingMove(null);
+  };
 
   return (
     <div style={styles.dayViewWrap}>
@@ -871,10 +917,28 @@ function DayTimelineView({
               onHeaderClick={() => setStaffFilter(staff.id)}
               onSlotClick={(time) => onSlotClick(staff.id, time)}
               onEditAppt={onEditAppt}
+              onSlotDrop={(time, apptId) => handleDropOnSlot(staff.id, time, apptId)}
             />
           ))}
         </div>
       </div>
+
+      {pendingMove && (
+        <div className="modal-overlay" style={styles.modalOverlay} onClick={() => setPendingMove(null)}>
+          <div className="modal-card" style={styles.confirmMoveCard} onClick={(e) => e.stopPropagation()}>
+            <p style={styles.confirmMoveText}>
+              Premestiti <strong>{pendingMove.sourceAppt.blocked ? "Blokirano" : pendingMove.sourceAppt.service}</strong>
+              {pendingMove.sourceAppt.client ? ` (${pendingMove.sourceAppt.client})` : ""} sa{" "}
+              <strong>{staffById(pendingMove.sourceAppt.staff, employees).name} {pendingMove.sourceAppt.time}</strong> na{" "}
+              <strong>{staffById(pendingMove.targetStaffId, employees).name} {pendingMove.targetTime}</strong>?
+            </p>
+            <div style={styles.confirmMoveBtnRow}>
+              <button style={styles.cancelBtn} onClick={() => setPendingMove(null)}>Otkaži</button>
+              <button style={styles.saveBtn} onClick={confirmMove}>Da, premesti</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -895,7 +959,7 @@ function RibbonTab({ label, active, color, onClick }) {
   );
 }
 
-function StaffTimelineColumn({ staff, appts, wide, isDesktop, clickableHeader, onHeaderClick, onSlotClick, onEditAppt }) {
+function StaffTimelineColumn({ staff, appts, wide, isDesktop, clickableHeader, onHeaderClick, onSlotClick, onEditAppt, onSlotDrop }) {
   const groupInfo = useMemo(() => {
     const byGroup = {};
     appts.forEach((a) => {
@@ -940,6 +1004,11 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, clickableHeader, o
           <button
             key={i}
             onClick={() => onSlotClick(slotLabel(i))}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              onSlotDrop(slotLabel(i), e.dataTransfer.getData("text/plain"));
+            }}
             style={{
               ...styles.slotBtn,
               top: i * ROW_HEIGHT,
@@ -977,6 +1046,11 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, clickableHeader, o
             <button
               key={a.id}
               onClick={() => onEditAppt(a.id)}
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData("text/plain", a.id);
+                e.dataTransfer.effectAllowed = "move";
+              }}
               style={{
                 ...styles.apptBlock,
                 top: pos.top,
@@ -1020,6 +1094,7 @@ function ApptForm({
   initial, prefill, defaultDate, appointments, employees, services, onAddService, onUpdateService, onDeleteService,
   clients, onSaveClientNote, onClose, onSave, onDelete,
 }) {
+  useEscapeToClose(onClose);
   const [date, setDate] = useState(initial?.date || prefill?.date || dateKey(defaultDate));
   const [time, setTime] = useState(initial?.time || prefill?.time || "");
   const [useCustomTime, setUseCustomTime] = useState(
@@ -1104,7 +1179,7 @@ function ApptForm({
   };
 
   return (
-    <div className="modal-overlay" style={styles.modalOverlay} onClick={onClose}>
+    <div className="modal-overlay" style={styles.modalOverlay}>
       <div className="modal-card" style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHeader}>
           <span style={styles.modalTitle}>{initial ? "Izmeni zakazivanje" : "Novo zakazivanje"}</span>
@@ -1371,6 +1446,7 @@ function ApptForm({
 }
 
 function ServicesManager({ services, onAdd, onUpdate, onDelete, onClose }) {
+  useEscapeToClose(onClose);
   const [newName, setNewName] = useState("");
   const [newDuration, setNewDuration] = useState(30);
 
@@ -1384,7 +1460,7 @@ function ServicesManager({ services, onAdd, onUpdate, onDelete, onClose }) {
   };
 
   return (
-    <div className="modal-overlay" style={styles.modalOverlay} onClick={onClose}>
+    <div className="modal-overlay" style={styles.modalOverlay}>
       <div className="modal-card" style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHeader}>
           <span style={styles.modalTitle}>Uredi usluge</span>
@@ -1562,6 +1638,7 @@ function ClientsView({ clients, onSave, onDelete }) {
 }
 
 function ClientForm({ initial, onClose, onSave, onDelete }) {
+  useEscapeToClose(onClose);
   const [name, setName] = useState(initial?.name || "");
   const [phone, setPhone] = useState(initial?.phone || "");
   const [note, setNote] = useState(initial?.note || "");
@@ -1569,7 +1646,7 @@ function ClientForm({ initial, onClose, onSave, onDelete }) {
   const canSave = name.trim().length > 0;
 
   return (
-    <div className="modal-overlay" style={styles.modalOverlay} onClick={onClose}>
+    <div className="modal-overlay" style={styles.modalOverlay}>
       <div className="modal-card" style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHeader}>
           <span style={styles.modalTitle}>{initial ? "Izmeni klijenta" : "Novi klijent"}</span>
@@ -1644,6 +1721,7 @@ const PERIODS = [
 /* ------------------------------------------------------------------ */
 
 function LoginModal({ onClose, onLogin, error, loading }) {
+  useEscapeToClose(onClose);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
@@ -1655,7 +1733,7 @@ function LoginModal({ onClose, onLogin, error, loading }) {
   };
 
   return (
-    <div className="modal-overlay" style={styles.modalOverlay} onClick={onClose}>
+    <div className="modal-overlay" style={styles.modalOverlay}>
       <div className="modal-card" style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHeader}>
           <span style={styles.modalTitle}>Prijava — Obračun zarada</span>
@@ -1706,7 +1784,7 @@ function LoginModal({ onClose, onLogin, error, loading }) {
 
 function StatsView({ appointments, employees, clients, onImportData, onOpenPayroll }) {
   const fileInputRef = useRef(null);
-  const [period, setPeriod] = useState("month");
+  const [period, setPeriod] = useState("day");
   const [customFrom, setCustomFrom] = useState(dateKey(startOfMonth(new Date())));
   const [customTo, setCustomTo] = useState(dateKey(new Date()));
 
@@ -1860,8 +1938,8 @@ function StatsView({ appointments, employees, clients, onImportData, onOpenPayro
 
       <SectionTitle text="Po radniku" />
       <div style={styles.chartCard}>
-        <ResponsiveContainer width="100%" height={200}>
-          <BarChart data={staffStats} margin={{ top: 8, right: 12, left: -12, bottom: 0 }}>
+        <ResponsiveContainer width="100%" height={210}>
+          <BarChart data={staffStats} margin={{ top: 22, right: 12, left: -12, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#E8DCC8" vertical={false} />
             <XAxis dataKey="name" tick={{ fill: "#5A473F", fontSize: 12, fontFamily: "'Work Sans', sans-serif" }} axisLine={{ stroke: "#E8DCC8" }} tickLine={false} />
             <YAxis tick={{ fill: "#8A7368", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }} axisLine={false} tickLine={false} width={54} />
@@ -1873,6 +1951,12 @@ function StatsView({ appointments, employees, clients, onImportData, onOpenPayro
               {staffStats.map((s, i) => (
                 <Cell key={i} fill={s.color} />
               ))}
+              <LabelList
+                dataKey="total"
+                position="top"
+                formatter={(v) => formatMoney(v)}
+                style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fill: "#5A473F" }}
+              />
             </Bar>
           </BarChart>
         </ResponsiveContainer>
@@ -2065,6 +2149,12 @@ const styles = {
   },
   dayTotalLabel: { fontSize: 12.5, color: "#8A7368" },
   dayTotalValue: { fontFamily: FONT_MONO, fontSize: 15, fontWeight: 500, color: "#7A2E3D" },
+  confirmMoveCard: {
+    background: "#FBF6EE", borderRadius: 14, padding: "22px 20px", maxWidth: 380, width: "100%",
+    display: "flex", flexDirection: "column", gap: 14,
+  },
+  confirmMoveText: { fontSize: 14, color: "#3E2E28", lineHeight: 1.6 },
+  confirmMoveBtnRow: { display: "flex", justifyContent: "flex-end", gap: 10 },
 
   timelineScrollWrap: { maxHeight: "min(640px, calc(100vh - 320px))", overflowY: "auto", marginTop: 10, borderRadius: 8 },
   timelineOuter: { display: "flex", position: "relative", gap: 6 },
@@ -2090,7 +2180,7 @@ const styles = {
   apptBlock: {
     position: "absolute", left: 2, right: 2, borderRadius: 6, border: "1px solid rgba(255,255,255,0.4)",
     padding: "2px 5px", display: "flex", flexDirection: "column", alignItems: "flex-start",
-    justifyContent: "center", gap: 1,
+    justifyContent: "center", gap: 1, cursor: "grab",
     overflow: "hidden", textAlign: "left", boxShadow: "0 2px 4px rgba(43,27,31,0.22)", zIndex: 2,
   },
   apptBlockBlocked: {
