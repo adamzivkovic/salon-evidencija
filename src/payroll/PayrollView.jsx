@@ -11,6 +11,11 @@ import { MONTH_NAMES, formatMoney, formatDateSr, monthLabel, periodForMonth, dat
 
 const COLLECTION_PAYROLL_RUNS = "payrollRuns";
 
+// Postavi na true tek kad Firebase Storage bude stvarno aktiviran (Blaze plan).
+// Dok je false, "Zaključi mesec" uopšte ne pokušava mrežni poziv ka Storage-u —
+// PDF-ovi se odmah preuzimaju direktno na računar, bez čekanja i grešaka u konzoli.
+const STORAGE_ENABLED = false;
+
 const STATUS_LABELS = {
   draft: "Nacrt",
   closed: "Zaključen",
@@ -26,6 +31,26 @@ function downloadBlob(blob, filename) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("Isteklo vreme čekanja (timeout).")), ms)),
+  ]);
+}
+
+async function uploadAllPdfs(basePath, recapBlob, employeeBlobs) {
+  const recapRef = ref(storage, `${basePath}/rekapitulacija.pdf`);
+  await uploadBytes(recapRef, recapBlob);
+  const recapUrl = await getDownloadURL(recapRef);
+  const paths = { rekapitulacija: recapUrl };
+  for (const eb of employeeBlobs) {
+    const empRef = ref(storage, `${basePath}/${eb.employeeId}.pdf`);
+    await uploadBytes(empRef, eb.blob);
+    paths[eb.employeeId] = await getDownloadURL(empRef);
+  }
+  return paths;
 }
 
 export default function PayrollView({ appointments, employees, user, onLogout, onBack }) {
@@ -150,31 +175,33 @@ function CalculationTab({ appointments, employees, user }) {
         blob: buildEmployeePdf(runDraft, r),
       }));
 
-      // 2) Pokušaj otpremanje u Firebase Storage. Ako ne uspe (npr. Storage
-      // zahteva plaćeni Firebase plan koji još nije aktiviran), ne prekidamo
-      // ceo proces — samo preuzimamo PDF-ove direktno na računar i beležimo
-      // da PDF-ovi nisu sačuvani u Storage-u za ovaj obračun.
+      // 2) Pokušaj otpremanje u Firebase Storage. Dok Storage nije aktiviran
+      // na Firebase nalogu (STORAGE_ENABLED = false ispod), ovaj deo se
+      // potpuno preskače — nema mrežnih poziva, nema čekanja, nema greške u
+      // konzoli. Kad se Storage jednom uključi, promeni STORAGE_ENABLED na
+      // true (na vrhu ovog fajla) da počne stvarno otpremanje.
       const basePath = `payroll/${runDraft.year}/${runDraft.periodFrom}_${runDraft.periodTo}`;
       let pdfPaths = null;
       let storageFailed = false;
-      try {
-        const recapRef = ref(storage, `${basePath}/rekapitulacija.pdf`);
-        await uploadBytes(recapRef, recapBlob);
-        const recapUrl = await getDownloadURL(recapRef);
-        const paths = { rekapitulacija: recapUrl };
-        for (const eb of employeeBlobs) {
-          const empRef = ref(storage, `${basePath}/${eb.employeeId}.pdf`);
-          await uploadBytes(empRef, eb.blob);
-          paths[eb.employeeId] = await getDownloadURL(empRef);
-        }
-        pdfPaths = paths;
-      } catch (storageErr) {
-        console.error("Storage upload nije uspeo, prelazim na lokalno preuzimanje:", storageErr);
+
+      if (!STORAGE_ENABLED) {
         storageFailed = true;
         downloadBlob(recapBlob, `Obracun_${runDraft.label.replace(/\s+/g, "_")}_Rekapitulacija.pdf`);
         employeeBlobs.forEach((eb) =>
           downloadBlob(eb.blob, `Obracun_${runDraft.label.replace(/\s+/g, "_")}_${eb.name}.pdf`)
         );
+      } else {
+        try {
+          const paths = await withTimeout(uploadAllPdfs(basePath, recapBlob, employeeBlobs), 10000);
+          pdfPaths = paths;
+        } catch (storageErr) {
+          console.error("Storage upload nije uspeo, prelazim na lokalno preuzimanje:", storageErr);
+          storageFailed = true;
+          downloadBlob(recapBlob, `Obracun_${runDraft.label.replace(/\s+/g, "_")}_Rekapitulacija.pdf`);
+          employeeBlobs.forEach((eb) =>
+            downloadBlob(eb.blob, `Obracun_${runDraft.label.replace(/\s+/g, "_")}_${eb.name}.pdf`)
+          );
+        }
       }
 
       // 3) Sačuvaj "zamrznut" dokument u Firestore (uvek, bez obzira na Storage)
