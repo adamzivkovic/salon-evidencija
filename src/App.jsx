@@ -1104,8 +1104,8 @@ function ApptForm({
   };
 
   return (
-    <div style={styles.modalOverlay} onClick={onClose}>
-      <div style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay" style={styles.modalOverlay} onClick={onClose}>
+      <div className="modal-card" style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHeader}>
           <span style={styles.modalTitle}>{initial ? "Izmeni zakazivanje" : "Novo zakazivanje"}</span>
           <button style={styles.iconBtn} onClick={onClose} aria-label="Zatvori">
@@ -1384,8 +1384,8 @@ function ServicesManager({ services, onAdd, onUpdate, onDelete, onClose }) {
   };
 
   return (
-    <div style={styles.modalOverlay} onClick={onClose}>
-      <div style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay" style={styles.modalOverlay} onClick={onClose}>
+      <div className="modal-card" style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHeader}>
           <span style={styles.modalTitle}>Uredi usluge</span>
           <button style={styles.iconBtn} onClick={onClose} aria-label="Zatvori">
@@ -1569,8 +1569,8 @@ function ClientForm({ initial, onClose, onSave, onDelete }) {
   const canSave = name.trim().length > 0;
 
   return (
-    <div style={styles.modalOverlay} onClick={onClose}>
-      <div style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay" style={styles.modalOverlay} onClick={onClose}>
+      <div className="modal-card" style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHeader}>
           <span style={styles.modalTitle}>{initial ? "Izmeni klijenta" : "Novi klijent"}</span>
           <button style={styles.iconBtn} onClick={onClose} aria-label="Zatvori">
@@ -1655,8 +1655,8 @@ function LoginModal({ onClose, onLogin, error, loading }) {
   };
 
   return (
-    <div style={styles.modalOverlay} onClick={onClose}>
-      <div style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay" style={styles.modalOverlay} onClick={onClose}>
+      <div className="modal-card" style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHeader}>
           <span style={styles.modalTitle}>Prijava — Obračun zarada</span>
           <button style={styles.iconBtn} onClick={onClose} aria-label="Zatvori">
@@ -1974,11 +1974,15 @@ function GlobalStyle() {
       .app-root { max-width: 560px; margin: 0 auto; min-height: 100vh; }
       .day-cell { aspect-ratio: 1; }
       .day-cell-name { display: none; }
+      .modal-overlay { align-items: flex-end; }
+      .modal-card { border-radius: 16px 16px 0 0; }
 
       @media (min-width: 900px) {
         .app-root { max-width: 1100px; }
         .day-cell { aspect-ratio: 4 / 3; }
         .day-cell-name { display: block; font-size: 11px; color: #B4A296; margin-top: 2px; }
+        .modal-overlay { align-items: center; }
+        .modal-card { border-radius: 16px; max-height: 85vh; }
       }
     `}</style>
   );
@@ -2115,10 +2119,10 @@ const styles = {
 
   modalOverlay: {
     position: "fixed", inset: 0, background: "rgba(43,27,31,0.45)",
-    display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 20,
+    display: "flex", justifyContent: "center", zIndex: 20,
   },
   modalCard: {
-    background: "#FBF6EE", width: "100%", maxWidth: 560, borderRadius: "16px 16px 0 0",
+    background: "#FBF6EE", width: "100%", maxWidth: 560,
     maxHeight: "88vh", display: "flex", flexDirection: "column", overflow: "hidden",
   },
   modalHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 18px", borderBottom: "1px solid #EFE3D0" },
