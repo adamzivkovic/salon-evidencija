@@ -12,7 +12,7 @@ import {
 } from "recharts";
 import {
   Plus, X, ChevronLeft, ChevronRight, Scissors, Trash2,
-  CalendarDays, BarChart3, Banknote, Users, Download, Upload, Pencil, Lock, LogOut,
+  CalendarDays, BarChart3, Banknote, Users, Download, Upload, Pencil, Lock, LogOut, AlertTriangle,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -781,10 +781,24 @@ function MonthView({ appointments, employees, selectedDate, setSelectedDate, onS
 /* Day timeline view                                                   */
 /* ------------------------------------------------------------------ */
 
+// Prati da li je ekran "desktop" širine (isti prag kao CSS media query za
+// .app-root) — koristi se da odlučimo da li ime klijenta staje u zagradi
+// pored usluge na vremenskoj osi.
+function useIsDesktop() {
+  const [isDesktop, setIsDesktop] = useState(() => typeof window !== "undefined" && window.innerWidth >= 900);
+  useEffect(() => {
+    const onResize = () => setIsDesktop(window.innerWidth >= 900);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return isDesktop;
+}
+
 function DayTimelineView({
   appointments, employees, selectedDate, setSelectedDate, onBack, onSlotClick, onEditAppt,
 }) {
   const [staffFilter, setStaffFilter] = useState("all");
+  const isDesktop = useIsDesktop();
   const key = dateKey(selectedDate);
 
   const dayAppts = useMemo(() => appointments.filter((a) => a.date === key), [appointments, key]);
@@ -852,6 +866,7 @@ function DayTimelineView({
               staff={staff}
               appts={dayAppts.filter((a) => a.staff === staff.id)}
               wide={wide}
+              isDesktop={isDesktop}
               clickableHeader={staffFilter === "all"}
               onHeaderClick={() => setStaffFilter(staff.id)}
               onSlotClick={(time) => onSlotClick(staff.id, time)}
@@ -880,7 +895,7 @@ function RibbonTab({ label, active, color, onClick }) {
   );
 }
 
-function StaffTimelineColumn({ staff, appts, wide, clickableHeader, onHeaderClick, onSlotClick, onEditAppt }) {
+function StaffTimelineColumn({ staff, appts, wide, isDesktop, clickableHeader, onHeaderClick, onSlotClick, onEditAppt }) {
   const groupInfo = useMemo(() => {
     const byGroup = {};
     appts.forEach((a) => {
@@ -932,7 +947,9 @@ function StaffTimelineColumn({ staff, appts, wide, clickableHeader, onHeaderClic
               borderTop: i % 2 === 0 ? "1px solid #D9C4A8" : "1px dashed #E3D4BD",
             }}
             aria-label={`Zakaži u ${slotLabel(i)}`}
-          />
+          >
+            <span style={styles.slotGhostTime}>{slotLabel(i)}</span>
+          </button>
         ))}
         {connectors.map((c) => (
           <div key={c.key} style={{ ...styles.groupConnector, top: c.top, height: c.height }}>
@@ -947,11 +964,14 @@ function StaffTimelineColumn({ staff, appts, wide, clickableHeader, onHeaderClic
           const group = a.groupId ? groupInfo[a.groupId] : null;
           const groupTag = group && group.length > 1 ? ` (${group.findIndex((g) => g.id === a.id) + 1}/${group.length})` : "";
           const siblingHasPrice = group ? group.some((g) => g.id !== a.id && g.price !== "" && g.price !== null && g.price !== undefined && !isNaN(g.price)) : false;
+          const isPaid = hasOwnPrice || siblingHasPrice;
           const priceText = hasOwnPrice ? formatMoney(a.price) : siblingHasPrice ? "Naplaćeno" : "Nije naplaćeno";
+          const showUnpaidFlag = !a.blocked && !isPaid;
 
           // Koliko redova teksta stane u blok, zavisno od njegove visine (trajanja usluge).
-          const showClient = blockHeight >= 46;
+          const showClientLine = blockHeight >= 46;
           const showPrice = blockHeight >= 30;
+          const showInlineClient = isDesktop && !showClientLine && showPrice && a.client;
 
           return (
             <button
@@ -965,15 +985,22 @@ function StaffTimelineColumn({ staff, appts, wide, clickableHeader, onHeaderClic
                 ...(a.blocked ? styles.apptBlockBlocked : {}),
               }}
             >
+              {showUnpaidFlag && (
+                <span style={styles.unpaidFlag} title="Nije naplaćeno">
+                  <AlertTriangle size={11} color="#A13A3A" fill="#FFE8B8" />
+                </span>
+              )}
               {a.blocked ? (
                 <>
                   <span style={styles.apptBlockService}>🚫 Blokirano</span>
-                  {showClient && a.client && <span style={styles.apptBlockClient}>{a.client}</span>}
+                  {showClientLine && a.client && <span style={styles.apptBlockClient}>{a.client}</span>}
                 </>
               ) : (
                 <>
-                  <span style={styles.apptBlockService}>{a.groupId ? "🔗 " : ""}{a.service}{groupTag}</span>
-                  {showClient && a.client && <span style={styles.apptBlockClient}>{a.client}</span>}
+                  <span style={styles.apptBlockService}>
+                    {a.groupId ? "🔗 " : ""}{a.service}{groupTag}{showInlineClient ? ` (${a.client})` : ""}
+                  </span>
+                  {showClientLine && a.client && <span style={styles.apptBlockClient}>{a.client}</span>}
                   {showPrice && <span style={styles.apptBlockPrice}>{priceText}</span>}
                 </>
               )}
@@ -1228,6 +1255,12 @@ function ApptForm({
                 step="1"
                 value={price}
                 onChange={(e) => setPrice(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleSave();
+                  }
+                }}
                 placeholder="Upiši kad se naplati"
                 style={styles.input}
               />
@@ -1242,6 +1275,12 @@ function ApptForm({
               list={blocked ? undefined : "clients-datalist"}
               value={client}
               onChange={(e) => handleClientChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleSave();
+                }
+              }}
               placeholder={blocked ? "npr. godišnji odmor, pauza…" : "Ime klijenta"}
               style={styles.input}
             />
@@ -2039,7 +2078,11 @@ const styles = {
   },
   staffColHeaderBtn: { width: "100%", border: "none", cursor: "pointer" },
   staffColBody: { position: "relative", height: TIMELINE_HEIGHT, background: "#FFFDF9", borderLeft: "1px solid #EFE3D0" },
-  slotBtn: { position: "absolute", left: 0, right: 0, border: "none", background: "transparent", padding: 0 },
+  slotBtn: {
+    position: "absolute", left: 0, right: 0, border: "none", background: "transparent", padding: 0,
+    display: "flex", alignItems: "center", justifyContent: "center",
+  },
+  slotGhostTime: { fontSize: 10, fontFamily: FONT_MONO, color: "rgba(122,46,61,0.16)", pointerEvents: "none" },
   apptBlock: {
     position: "absolute", left: 2, right: 2, borderRadius: 6, border: "1px solid rgba(255,255,255,0.4)",
     padding: "2px 5px", display: "flex", flexDirection: "column", alignItems: "flex-start",
@@ -2052,6 +2095,7 @@ const styles = {
   apptBlockService: { fontSize: 11, fontWeight: 700, color: "#FBF6EE", lineHeight: 1.15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" },
   apptBlockClient: { fontSize: 10.5, color: "rgba(251,246,238,0.9)", lineHeight: 1.15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" },
   apptBlockPrice: { fontFamily: FONT_MONO, fontSize: 10, color: "rgba(251,246,238,0.95)", lineHeight: 1.15 },
+  unpaidFlag: { position: "absolute", top: 2, right: 3, lineHeight: 0, filter: "drop-shadow(0 1px 1px rgba(0,0,0,0.35))" },
   groupConnector: {
     position: "absolute", left: "50%", width: 0, borderLeft: "2px dashed #B99A4D",
     transform: "translateX(-50%)", pointerEvents: "none", zIndex: 1,
