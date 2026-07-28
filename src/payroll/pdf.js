@@ -124,6 +124,12 @@ export function buildRecapPdf(run, results, recap) {
   doc.text(`Ukupno isplaćeno na ime provizije: ${formatMoney(recap.totalCommission)}`, 14, y2);
   y2 += 7;
   doc.text(`Ukupno izdvojeno za materijal: ${formatMoney(recap.totalMaterial)}`, 14, y2);
+  y2 += 7;
+  doc.text(`Ukupno isplaćeno zaposlenima (zarade): ${formatMoney(recap.totalEmployeeEarnings)}`, 14, y2);
+  y2 += 10;
+  doc.setFontSize(13);
+  doc.setTextColor(...ACCENT);
+  doc.text(`Preostali iznos (za salon): ${formatMoney(recap.remainingForSalon)}`, 14, y2);
 
   return doc.output("blob");
 }

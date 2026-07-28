@@ -21,24 +21,46 @@ import {
 // Koristi se samo jednom, da se Firebase baza zaposlenih popuni pri prvom pokretanju.
 // Posle toga se sve čuva u Firestore kolekciji "employees" (uređivanje UI dolazi kasnije).
 const SEED_EMPLOYEES = [
-  { id: "ivana", name: "Ivana", color: "#7A2E3D", calcType: "material_deduction", defaultPercentage: 30 },
-  { id: "bilja", name: "Bilja", color: "#4A7A6B", calcType: "commission", defaultPercentage: 40 },
-  { id: "tamara", name: "Tamara", color: "#C4914B", calcType: "material_deduction", defaultPercentage: 30 },
+  { id: "ivana", name: "Ivana", color: "#7A2E3D", calcType: "material_deduction", defaultPercentage: 30, order: 0 },
+  { id: "tamara", name: "Tamara", color: "#C4914B", calcType: "material_deduction", defaultPercentage: 30, order: 1 },
+  { id: "bilja", name: "Bilja", color: "#4A7A6B", calcType: "commission", defaultPercentage: 40, order: 2 },
 ];
+
+// Redosled prikaza zaposlenih: prvo po "order" polju (ako postoji), a za već
+// postojeće zapise iz baze koji ga još nemaju, po ovoj rezervnoj listi imena —
+// tako se redosled ne menja nasumično bez potrebe da se ručno dira baza.
+const EMPLOYEE_NAME_ORDER_FALLBACK = { Ivana: 0, Tamara: 1, Bilja: 2 };
+function employeeSortKey(emp) {
+  if (typeof emp.order === "number") return emp.order;
+  if (emp.name in EMPLOYEE_NAME_ORDER_FALLBACK) return EMPLOYEE_NAME_ORDER_FALLBACK[emp.name];
+  return 99;
+}
 
 // Koristi se samo jednom, da se Firebase baza usluga popuni pri prvom pokretanju.
 // Posle toga se sve menja kroz "Uredi usluge" u aplikaciji, ne ovde u kodu.
 const SEED_SERVICES = [
-  { name: "Žensko šišanje", duration: 30 },
-  { name: "Muško šišanje", duration: 30 },
-  { name: "Dečije šišanje", duration: 30 },
-  { name: "Feniranje", duration: 30 },
-  { name: "Šišanje i feniranje", duration: 60 },
-  { name: "Farbanje", duration: 90 },
-  { name: "Pramenovi / Melir", duration: 120 },
-  { name: "Tretman kose", duration: 30 },
-  { name: "Trajna ondulacija", duration: 90 },
-  { name: "Svečana frizura", duration: 60 },
+  // Šišanje
+  { name: "Šišanje žensko", duration: 45 },
+  { name: "Muško šišanje sa pranjem", duration: 30 },
+  { name: "Muško šišanje bez pranja", duration: 20 },
+  { name: "Sređivanje brade", duration: 15 },
+  // Feniranje
+  { name: "Feniranje kratka", duration: 20 },
+  { name: "Feniranje srednja", duration: 30 },
+  { name: "Feniranje duga", duration: 40 },
+  { name: "Feniranje extra duga", duration: 50 },
+  // Farbanje
+  { name: "Farbanje izrastak do 1cm", duration: 60 },
+  { name: "Farbanje cela kosa (kratka)", duration: 90 },
+  { name: "Farbanje cela kosa (paz)", duration: 120 },
+  { name: "Farbanje cela kosa (duga)", duration: 150 },
+  // Pramenovi (klasični)
+  { name: "Pramenovi kratka (gornji deo)", duration: 90 },
+  { name: "Pramenovi do brade", duration: 120 },
+  { name: "Pramenovi do ramena", duration: 150 },
+  { name: "Pramenovi srednja", duration: 180 },
+  { name: "Pramenovi duga", duration: 210 },
+  { name: "Pramenovi pola glave", duration: 150 },
 ];
 
 const DAY_NAMES = ["Nedelja", "Ponedeljak", "Utorak", "Sreda", "Četvrtak", "Petak", "Subota"];
@@ -58,7 +80,7 @@ const WORK_END_HOUR = 20;
 const TOTAL_SLOTS = (WORK_END_HOUR - WORK_START_HOUR) * 2; // 30-min slots
 const ROW_HEIGHT = 34;
 const TIMELINE_HEIGHT = TOTAL_SLOTS * ROW_HEIGHT;
-const STAFF_HEADER_HEIGHT = 28;
+const STAFF_HEADER_HEIGHT = 34;
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                            */
@@ -294,7 +316,11 @@ export default function SalonApp() {
             setDoc(doc(db, COLLECTION_EMPLOYEES, id), rest).catch(() => {});
           });
         } else {
-          setEmployees(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+          setEmployees(
+            snap.docs
+              .map((d) => ({ id: d.id, ...d.data() }))
+              .sort((a, b) => employeeSortKey(a) - employeeSortKey(b))
+          );
         }
         setSaveError(false);
         employeesLoaded = true;
@@ -787,8 +813,15 @@ function DayTimelineView({
           <div style={styles.timeLabelCol}>
             <div style={styles.timeLabelColHeader} />
             {Array.from({ length: TOTAL_SLOTS + 1 }).map((_, i) => (
-              <div key={i} style={{ ...styles.timeLabel, top: STAFF_HEADER_HEIGHT + i * ROW_HEIGHT }}>
-                {slotLabel(i)}
+              <div
+                key={i}
+                style={{
+                  ...styles.timeLabelLine,
+                  top: STAFF_HEADER_HEIGHT + i * ROW_HEIGHT,
+                  borderTop: i % 2 === 0 ? "1px solid #D9C4A8" : "1px dashed #E3D4BD",
+                }}
+              >
+                <span style={styles.timeLabel}>{slotLabel(i)}</span>
               </div>
             ))}
           </div>
@@ -827,27 +860,31 @@ function RibbonTab({ label, active, color, onClick }) {
 }
 
 function StaffTimelineColumn({ staff, appts, wide, clickableHeader, onHeaderClick, onSlotClick, onEditAppt }) {
-  const connectors = useMemo(() => {
+  const groupInfo = useMemo(() => {
     const byGroup = {};
     appts.forEach((a) => {
       if (!a.groupId) return;
       if (!byGroup[a.groupId]) byGroup[a.groupId] = [];
       byGroup[a.groupId].push(a);
     });
+    Object.values(byGroup).forEach((group) => group.sort((a, b) => (a.time || "").localeCompare(b.time || "")));
+    return byGroup;
+  }, [appts]);
+
+  const connectors = useMemo(() => {
     const gaps = [];
-    Object.values(byGroup).forEach((group) => {
+    Object.values(groupInfo).forEach((group) => {
       if (group.length < 2) return;
-      const sorted = group.slice().sort((a, b) => (a.time || "").localeCompare(b.time || ""));
-      for (let i = 0; i < sorted.length - 1; i++) {
-        const posA = apptPosition(sorted[i]);
-        const posB = apptPosition(sorted[i + 1]);
+      for (let i = 0; i < group.length - 1; i++) {
+        const posA = apptPosition(group[i]);
+        const posB = apptPosition(group[i + 1]);
         const top = posA.top + posA.height;
         const height = posB.top - top;
-        if (height > 6) gaps.push({ key: `${sorted[i].id}-${sorted[i + 1].id}`, top, height });
+        if (height > 6) gaps.push({ key: `${group[i].id}-${group[i + 1].id}`, top, height });
       }
     });
     return gaps;
-  }, [appts]);
+  }, [groupInfo]);
 
   return (
     <div style={styles.staffCol}>
@@ -883,7 +920,18 @@ function StaffTimelineColumn({ staff, appts, wide, clickableHeader, onHeaderClic
         ))}
         {appts.map((a) => {
           const pos = apptPosition(a);
-          const hasPrice = a.price !== "" && a.price !== null && a.price !== undefined && !isNaN(a.price);
+          const blockHeight = Math.max(pos.height - 3, 16);
+          const hasOwnPrice = a.price !== "" && a.price !== null && a.price !== undefined && !isNaN(a.price);
+
+          const group = a.groupId ? groupInfo[a.groupId] : null;
+          const groupTag = group && group.length > 1 ? ` (${group.findIndex((g) => g.id === a.id) + 1}/${group.length})` : "";
+          const siblingHasPrice = group ? group.some((g) => g.id !== a.id && g.price !== "" && g.price !== null && g.price !== undefined && !isNaN(g.price)) : false;
+          const priceText = hasOwnPrice ? formatMoney(a.price) : siblingHasPrice ? "Naplaćeno" : "Nije naplaćeno";
+
+          // Koliko redova teksta stane u blok, zavisno od njegove visine (trajanja usluge).
+          const showClient = blockHeight >= 46;
+          const showPrice = blockHeight >= 30;
+
           return (
             <button
               key={a.id}
@@ -891,7 +939,7 @@ function StaffTimelineColumn({ staff, appts, wide, clickableHeader, onHeaderClic
               style={{
                 ...styles.apptBlock,
                 top: pos.top,
-                height: Math.max(pos.height - 3, 16),
+                height: blockHeight,
                 background: a.blocked ? undefined : staff.color,
                 ...(a.blocked ? styles.apptBlockBlocked : {}),
               }}
@@ -899,13 +947,13 @@ function StaffTimelineColumn({ staff, appts, wide, clickableHeader, onHeaderClic
               {a.blocked ? (
                 <>
                   <span style={styles.apptBlockService}>🚫 Blokirano</span>
-                  {a.client && <span style={styles.apptBlockClient}>{a.client}</span>}
+                  {showClient && a.client && <span style={styles.apptBlockClient}>{a.client}</span>}
                 </>
               ) : (
                 <>
-                  <span style={styles.apptBlockService}>{a.groupId ? "🔗 " : ""}{a.service}</span>
-                  {a.client && <span style={styles.apptBlockClient}>{a.client}</span>}
-                  <span style={styles.apptBlockPrice}>{hasPrice ? formatMoney(a.price) : "Nije naplaćeno"}</span>
+                  <span style={styles.apptBlockService}>{a.groupId ? "🔗 " : ""}{a.service}{groupTag}</span>
+                  {showClient && a.client && <span style={styles.apptBlockClient}>{a.client}</span>}
+                  {showPrice && <span style={styles.apptBlockPrice}>{priceText}</span>}
                 </>
               )}
             </button>
@@ -1958,13 +2006,14 @@ const styles = {
   timelineOuter: { display: "flex", position: "relative", gap: 6 },
   timeLabelCol: { width: 42, flexShrink: 0, position: "relative", height: STAFF_HEADER_HEIGHT + TIMELINE_HEIGHT },
   timeLabelColHeader: { height: STAFF_HEADER_HEIGHT, position: "sticky", top: 0, background: "#FBF6EE", zIndex: 6 },
-  timeLabel: { position: "absolute", left: 0, fontSize: 10.5, color: "#B4A296", fontFamily: FONT_MONO, lineHeight: 1 },
+  timeLabelLine: { position: "absolute", left: 0, right: 0 },
+  timeLabel: { display: "block", fontSize: 10.5, color: "#8A7368", fontFamily: FONT_MONO, lineHeight: 1, padding: "2px 4px 0 0", textAlign: "right" },
 
   staffCol: { flex: 1, minWidth: 0 },
   staffColHeader: {
     fontSize: 11, fontWeight: 600, color: "#FBF6EE", textAlign: "center",
-    height: STAFF_HEADER_HEIGHT, display: "flex", alignItems: "center", justifyContent: "center",
-    borderRadius: "6px 6px 0 0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+    height: 26, marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "center",
+    borderRadius: 6, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
     position: "sticky", top: 0, zIndex: 6,
   },
   staffColHeaderBtn: { width: "100%", border: "none", cursor: "pointer" },
@@ -1972,15 +2021,16 @@ const styles = {
   slotBtn: { position: "absolute", left: 0, right: 0, border: "none", background: "transparent", padding: 0 },
   apptBlock: {
     position: "absolute", left: 2, right: 2, borderRadius: 6, border: "1px solid rgba(255,255,255,0.4)",
-    padding: "3px 5px", display: "flex", flexDirection: "column", alignItems: "flex-start",
+    padding: "2px 5px", display: "flex", flexDirection: "column", alignItems: "flex-start",
+    justifyContent: "center", gap: 1,
     overflow: "hidden", textAlign: "left", boxShadow: "0 2px 4px rgba(43,27,31,0.22)", zIndex: 2,
   },
   apptBlockBlocked: {
     background: "repeating-linear-gradient(45deg, #A8927F, #A8927F 6px, #96806D 6px, #96806D 12px)",
   },
-  apptBlockService: { fontSize: 11, fontWeight: 700, color: "#FBF6EE", lineHeight: 1.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" },
-  apptBlockClient: { fontSize: 10.5, color: "rgba(251,246,238,0.9)", lineHeight: 1.2 },
-  apptBlockPrice: { fontFamily: FONT_MONO, fontSize: 10, color: "rgba(251,246,238,0.95)", marginTop: 2 },
+  apptBlockService: { fontSize: 11, fontWeight: 700, color: "#FBF6EE", lineHeight: 1.15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" },
+  apptBlockClient: { fontSize: 10.5, color: "rgba(251,246,238,0.9)", lineHeight: 1.15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" },
+  apptBlockPrice: { fontFamily: FONT_MONO, fontSize: 10, color: "rgba(251,246,238,0.95)", lineHeight: 1.15 },
   groupConnector: {
     position: "absolute", left: "50%", width: 0, borderLeft: "2px dashed #B99A4D",
     transform: "translateX(-50%)", pointerEvents: "none", zIndex: 1,

@@ -43,7 +43,7 @@ export function calculateEmployeeResult(employee, appointmentsInRange, percentag
         commission: round2((Number(a.price) * pct) / 100),
       }));
       const totalCommission = round2(lines.reduce((s, l) => s + l.commission, 0));
-      return { ...base, lines, totalCommission };
+      return { ...base, lines, totalCommission, earnings: totalCommission };
     }
 
     case "material_deduction": {
@@ -60,12 +60,12 @@ export function calculateEmployeeResult(employee, appointmentsInRange, percentag
       });
       const totalMaterial = round2(lines.reduce((s, l) => s + l.materialDeduction, 0));
       const netTotal = round2(revenue - totalMaterial);
-      return { ...base, lines, totalMaterial, netTotal };
+      return { ...base, lines, totalMaterial, netTotal, earnings: netTotal };
     }
 
     // ---- Mesto za buduće tipove obračuna (fixed_salary, hybrid, ...) ----
-    // case "fixed_salary": { ... }
-    // case "hybrid": { ... }
+    // case "fixed_salary": { ... earnings: fixedAmount }
+    // case "hybrid": { ... earnings: ... }
 
     default: {
       // Nepoznat/još nepodržan tip obračuna — ne rušimo aplikaciju, samo
@@ -76,7 +76,7 @@ export function calculateEmployeeResult(employee, appointmentsInRange, percentag
         service: a.service,
         price: Number(a.price),
       }));
-      return { ...base, lines, unsupported: true };
+      return { ...base, lines, unsupported: true, earnings: 0 };
     }
   }
 }
@@ -102,6 +102,8 @@ export function calculatePayroll({ employees, appointments, percentages, from, t
   const totalMaterial = round2(
     results.filter((r) => r.calcType === "material_deduction").reduce((s, r) => s + (r.totalMaterial || 0), 0)
   );
+  const totalEmployeeEarnings = round2(results.reduce((s, r) => s + (r.earnings || 0), 0));
+  const remainingForSalon = round2(totalRevenue - totalEmployeeEarnings);
 
   const recap = {
     totalRevenue,
@@ -112,6 +114,9 @@ export function calculatePayroll({ employees, appointments, percentages, from, t
       .map((r) => ({ employeeId: r.employeeId, name: r.name, material: r.totalMaterial })),
     totalMaterial,
     totalRevenueAllEmployees: totalRevenue,
+    perEmployeeEarnings: results.map((r) => ({ employeeId: r.employeeId, name: r.name, earnings: r.earnings || 0 })),
+    totalEmployeeEarnings,
+    remainingForSalon,
   };
 
   return { results, recap };

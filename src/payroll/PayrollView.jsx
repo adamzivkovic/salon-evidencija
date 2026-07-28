@@ -461,6 +461,22 @@ function RecapCard({ recap, results }) {
         <span style={{ fontWeight: 700 }}>Ukupno izdvojeno za materijal</span>
         <span style={{ ...styles.recapValue, fontWeight: 700 }}>{formatMoney(recap.totalMaterial)}</span>
       </div>
+      <div style={styles.recapDivider} />
+      {(recap.perEmployeeEarnings || []).map((r) => (
+        <div key={r.employeeId} style={styles.recapRow}>
+          <span>{r.name} — zarada</span>
+          <span style={styles.recapValue}>{formatMoney(r.earnings)}</span>
+        </div>
+      ))}
+      <div style={styles.recapRow}>
+        <span style={{ fontWeight: 700 }}>Ukupno isplaćeno zaposlenima</span>
+        <span style={{ ...styles.recapValue, fontWeight: 700 }}>{formatMoney(recap.totalEmployeeEarnings)}</span>
+      </div>
+      <div style={styles.recapDivider} />
+      <div style={styles.recapRowFinal}>
+        <span>Preostali iznos (za salon)</span>
+        <span style={styles.recapValueFinal}>{formatMoney(recap.remainingForSalon)}</span>
+      </div>
     </div>
   );
 }
@@ -677,6 +693,8 @@ const styles = {
   recapDivider: { height: 1, background: "#F2E9DB", margin: "10px 0" },
   recapRow: { display: "flex", justifyContent: "space-between", fontSize: 13, padding: "5px 0" },
   recapValue: { fontFamily: FONT_MONO },
+  recapRowFinal: { display: "flex", justifyContent: "space-between", fontSize: 15.5, fontWeight: 700, color: "#7A2E3D", padding: "4px 0" },
+  recapValueFinal: { fontFamily: FONT_MONO, fontSize: 16 },
 
   finalizeBtn: { width: "100%", border: "none", background: "#A13A3A", color: "#FBF6EE", borderRadius: 10, padding: "13px", fontSize: 14, fontWeight: 600, marginTop: 6 },
   finalizeBtnSmall: { border: "none", background: "#A13A3A", color: "#FBF6EE", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 },
