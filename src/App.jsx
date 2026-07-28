@@ -6,6 +6,7 @@ import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebas
 import { db, auth } from "./firebase";
 import PayrollView from "./payroll/PayrollView.jsx";
 import * as XLSX from "xlsx";
+import PinGate from "./PinGate.jsx";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
 } from "recharts";
@@ -213,6 +214,13 @@ function findOverlap(appointments, staffId, date, time, duration, excludeId) {
 /* ------------------------------------------------------------------ */
 
 export default function SalonApp() {
+  const [unlocked, setUnlocked] = useState(() => {
+    try {
+      return localStorage.getItem("salon-unlocked") === "true";
+    } catch (e) {
+      return false;
+    }
+  });
   const [appointments, setAppointments] = useState([]);
   const [clients, setClients] = useState([]);
   const [services, setServices] = useState([]);
@@ -494,8 +502,19 @@ export default function SalonApp() {
   };
 
   return (
-    <div className="app-root" style={styles.appRoot}>
+    <>
       <GlobalStyle />
+      {!unlocked ? (
+        <PinGate
+          onUnlock={() => {
+            try {
+              localStorage.setItem("salon-unlocked", "true");
+            } catch (e) {}
+            setUnlocked(true);
+          }}
+        />
+      ) : (
+      <div className="app-root" style={styles.appRoot}>
       <Header view={view} setView={setView} saveError={saveError} />
 
       {!loaded ? (
@@ -605,6 +624,8 @@ export default function SalonApp() {
         />
       )}
     </div>
+      )}
+    </>
   );
 }
 
