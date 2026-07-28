@@ -1,0 +1,30 @@
+{
+  "name": "Salon 2CATS · Evidencija",
+  "short_name": "Salon 2CATS",
+  "description": "Evidencija zakazivanja, klijenata i obračuna za Salon 2CATS",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#FBF6EE",
+  "theme_color": "#7A2E3D",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ]
+}
