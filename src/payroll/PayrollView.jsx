@@ -1,10 +1,11 @@
 import React, { useState, useMemo, useEffect } from "react";
 import {
-  collection, addDoc, updateDoc, doc, onSnapshot, serverTimestamp,
+  collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, serverTimestamp,
 } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { db, storage } from "../firebase";
-import { ChevronLeft, Lock, LogOut, Loader2, FileDown, Eye, Ban, AlertTriangle } from "lucide-react";
+import { APP_PIN } from "../appLock";
+import { ChevronLeft, Lock, LogOut, Loader2, FileDown, Eye, Ban, AlertTriangle, Trash2 } from "lucide-react";
 import { calculatePayroll } from "./calculations";
 import { buildEmployeePdf, buildRecapPdf } from "./pdf";
 import { MONTH_NAMES, formatMoney, formatDateSr, monthLabel, periodForMonth, dateKey } from "./utils";
@@ -545,6 +546,9 @@ function HistoryTab({ employees }) {
   const [loaded, setLoaded] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
   const [voidingId, setVoidingId] = useState(null);
+  const [confirmDeleteRun, setConfirmDeleteRun] = useState(null);
+  const [pinModalRun, setPinModalRun] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
 
   useEffect(() => {
     const unsub = onSnapshot(
@@ -582,6 +586,33 @@ function HistoryTab({ employees }) {
       window.alert("Greška prilikom storniranja. Pokušaj ponovo.");
     } finally {
       setVoidingId(null);
+    }
+  };
+
+  const handleDeleteConfirmed = async () => {
+    const run = pinModalRun;
+    setPinModalRun(null);
+    setDeletingId(run.id);
+    try {
+      await deleteDoc(doc(db, COLLECTION_PAYROLL_RUNS, run.id));
+      // Ako su PDF-ovi bili sačuvani u Storage-u, pokušaj obrisati i njih
+      // (bez greške ako Storage nije aktivan ili fajlovi ne postoje).
+      if (run.pdfPaths) {
+        const basePath = `payroll/${run.year}/${run.periodFrom}_${run.periodTo}`;
+        const names = ["rekapitulacija", ...(run.results || []).map((r) => r.employeeId)];
+        for (const n of names) {
+          try {
+            await deleteObject(ref(storage, `${basePath}/${n}.pdf`));
+          } catch (e) {
+            /* ignoriši — fajl možda ne postoji ili Storage nije aktivan */
+          }
+        }
+      }
+    } catch (e) {
+      console.error(e);
+      window.alert("Greška prilikom brisanja. Pokušaj ponovo.");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -628,6 +659,13 @@ function HistoryTab({ employees }) {
                     <Ban size={14} /> Storniraj
                   </button>
                 )}
+                <button
+                  style={styles.historyBtnDanger}
+                  onClick={() => setConfirmDeleteRun(run)}
+                  disabled={deletingId === run.id}
+                >
+                  <Trash2 size={14} /> {deletingId === run.id ? "Brišem…" : "Obriši"}
+                </button>
               </div>
             </div>
 
@@ -648,6 +686,77 @@ function HistoryTab({ employees }) {
           </div>
         ))
       )}
+
+      {confirmDeleteRun && (
+        <div style={styles.modalOverlay} onClick={() => setConfirmDeleteRun(null)}>
+          <div style={styles.confirmCard} onClick={(e) => e.stopPropagation()}>
+            <AlertTriangle size={26} color="#A13A3A" />
+            <p style={styles.confirmText}>
+              Da li si sigurna da želiš da trajno obrišeš obračun <strong>"{confirmDeleteRun.label}"</strong>?
+              Ova akcija se ne može opozvati.
+            </p>
+            <div style={styles.confirmBtnRow}>
+              <button style={styles.cancelBtn} onClick={() => setConfirmDeleteRun(null)}>Otkaži</button>
+              <button
+                style={styles.finalizeBtnSmall}
+                onClick={() => {
+                  setPinModalRun(confirmDeleteRun);
+                  setConfirmDeleteRun(null);
+                }}
+              >
+                Da, obriši
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pinModalRun && (
+        <PinConfirmModal onCancel={() => setPinModalRun(null)} onCorrect={handleDeleteConfirmed} />
+      )}
+    </div>
+  );
+}
+
+function PinConfirmModal({ onCancel, onCorrect }) {
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState(false);
+
+  const handleChange = (e) => {
+    const digits = e.target.value.replace(/\D/g, "").slice(0, APP_PIN.length);
+    setPin(digits);
+    setError(false);
+    if (digits.length === APP_PIN.length) {
+      if (digits === APP_PIN) {
+        onCorrect();
+      } else {
+        setError(true);
+        setTimeout(() => setPin(""), 400);
+      }
+    }
+  };
+
+  return (
+    <div style={styles.modalOverlay} onClick={onCancel}>
+      <div style={styles.confirmCard} onClick={(e) => e.stopPropagation()}>
+        <Lock size={24} color="#A13A3A" />
+        <p style={styles.confirmText}>Za potvrdu brisanja, unesi PIN kod aplikacije.</p>
+        <input
+          type="password"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          autoComplete="off"
+          autoFocus
+          maxLength={APP_PIN.length}
+          value={pin}
+          onChange={handleChange}
+          style={styles.pinConfirmInput}
+        />
+        {error && <p style={styles.loginError}>Pogrešan PIN, pokušaj ponovo.</p>}
+        <div style={styles.confirmBtnRow}>
+          <button style={styles.cancelBtn} onClick={onCancel}>Otkaži</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -738,6 +847,10 @@ const styles = {
   confirmText: { fontSize: 13.5, color: "#3E2E28", lineHeight: 1.6 },
   confirmBtnRow: { display: "flex", gap: 10, marginTop: 4 },
   loginError: { color: "#A13A3A", fontSize: 12.5 },
+  pinConfirmInput: {
+    width: 160, padding: "10px 12px", borderRadius: 8, border: "1px solid #E8DCC8",
+    background: "#FFFDF9", fontSize: 20, letterSpacing: 8, textAlign: "center", fontFamily: "'JetBrains Mono', monospace",
+  },
 
   historyCard: { background: "#FFFDF9", border: "1px solid #EFE3D0", borderRadius: 12, padding: "12px 14px", marginBottom: 10 },
   historyRow: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8 },
