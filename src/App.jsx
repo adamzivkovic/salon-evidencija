@@ -8,7 +8,7 @@ import PayrollView from "./payroll/PayrollView.jsx";
 import * as XLSX from "xlsx";
 import PinGate from "./PinGate.jsx";
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Cell, LabelList,
 } from "recharts";
 import {
   Plus, X, ChevronLeft, ChevronRight, Scissors, Trash2,
@@ -763,7 +763,7 @@ function MonthView({ appointments, employees, selectedDate, setSelectedDate, onS
 
       <div style={styles.weekdayRow}>
         {DAY_NAMES_SHORT_MON_FIRST.map((d) => (
-          <div key={d} style={styles.weekdayCell}>{d}</div>
+          <div key={d} className="weekday-cell" style={styles.weekdayCell}>{d}</div>
         ))}
       </div>
 
@@ -787,11 +787,11 @@ function MonthView({ appointments, employees, selectedDate, setSelectedDate, onS
                 ...(today ? styles.dayCellToday : {}),
               }}
             >
-              <span style={{ ...styles.dayCellNum, ...(today ? styles.dayCellNumToday : {}) }}>{d.getDate()}</span>
+              <span className="day-cell-num" style={{ ...styles.dayCellNum, ...(today ? styles.dayCellNumToday : {}) }}>{d.getDate()}</span>
               <span className="day-cell-name">{DAY_NAMES_SHORT_MON_FIRST[(d.getDay() + 6) % 7]}</span>
               <span style={styles.dayCellDots}>
                 {staffPresent.slice(0, 3).map((s) => (
-                  <span key={s.id} style={{ ...styles.dayDot, background: s.color }} />
+                  <span key={s.id} className="day-dot" style={{ ...styles.dayDot, background: s.color }} />
                 ))}
               </span>
             </button>
@@ -1102,6 +1102,10 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, clickableHeader, o
           const showClientLine = blockHeight >= 46;
           const showPrice = blockHeight >= 30;
           const showInlineClient = isDesktop && !showClientLine && showPrice && a.client;
+          // Na telefonu, kad je termin nenaplaćen (već upadljivo obeležen crvenim okvirom
+          // i ikonicom), nema potrebe da tekst "Nije naplaćeno" oduzima red — umesto toga
+          // pokaži ime klijenta na drugom redu, kao kod naplaćenih termina.
+          const mobileUnpaidCompact = !isDesktop && showUnpaidFlag;
 
           return (
             <button
@@ -1137,8 +1141,14 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, clickableHeader, o
                   <span style={styles.apptBlockService}>
                     {a.groupId ? "🔗 " : ""}{a.service}{groupTag}{showInlineClient ? ` (${a.client})` : ""}
                   </span>
-                  {showClientLine && a.client && <span style={styles.apptBlockClient}>{a.client}</span>}
-                  {showPrice && <span style={styles.apptBlockPrice}>{priceText}</span>}
+                  {mobileUnpaidCompact ? (
+                    showPrice && a.client && <span style={styles.apptBlockClient}>{a.client}</span>
+                  ) : (
+                    <>
+                      {showClientLine && a.client && <span style={styles.apptBlockClient}>{a.client}</span>}
+                      {showPrice && <span style={styles.apptBlockPrice}>{priceText}</span>}
+                    </>
+                  )}
                 </>
               )}
             </button>
@@ -2007,10 +2017,6 @@ function StatsView({ appointments, employees, clients, onImportData, onOpenPayro
             <CartesianGrid strokeDasharray="3 3" stroke="#E8DCC8" vertical={false} />
             <XAxis dataKey="name" tick={{ fill: "#5A473F", fontSize: 12, fontFamily: "'Work Sans', sans-serif" }} axisLine={{ stroke: "#E8DCC8" }} tickLine={false} />
             <YAxis tick={{ fill: "#8A7368", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }} axisLine={false} tickLine={false} width={54} />
-            <Tooltip
-              formatter={(value) => [formatMoney(value), "Naplaćeno"]}
-              contentStyle={{ fontFamily: "'Work Sans', sans-serif", borderRadius: 8, border: "1px solid #E8DCC8" }}
-            />
             <Bar dataKey="total" radius={[6, 6, 0, 0]}>
               {staffStats.map((s, i) => (
                 <Cell key={i} fill={s.color} />
@@ -2122,6 +2128,9 @@ function GlobalStyle() {
       .app-root { max-width: 560px; margin: 0 auto; min-height: 100vh; }
       .day-cell { aspect-ratio: 1; }
       .day-cell-name { display: none; }
+      .weekday-cell { font-size: 11px; }
+      .day-cell-num { font-size: 13px; }
+      .day-dot { width: 5px; height: 5px; }
       .modal-overlay { align-items: flex-end; }
       .modal-card { border-radius: 16px 16px 0 0; }
 
@@ -2134,7 +2143,10 @@ function GlobalStyle() {
       @media (min-width: 900px) {
         .app-root { max-width: 1100px; }
         .day-cell { aspect-ratio: 4 / 3; }
-        .day-cell-name { display: block; font-size: 11px; color: #B4A296; margin-top: 2px; }
+        .day-cell-name { display: block; font-size: clamp(11px, 1vw, 15px); color: #B4A296; margin-top: 2px; }
+        .weekday-cell { font-size: clamp(12px, 1.1vw, 16px); }
+        .day-cell-num { font-size: clamp(16px, 2.2vw, 28px); }
+        .day-dot { width: clamp(5px, 0.7vw, 9px); height: clamp(5px, 0.7vw, 9px); }
         .modal-overlay { align-items: center; }
         .modal-card { border-radius: 16px; max-height: 85vh; }
       }
@@ -2187,7 +2199,7 @@ const styles = {
 
   swipeHint: { textAlign: "center", fontSize: 11, color: "#C9BBAE", marginBottom: 10 },
   weekdayRow: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", marginBottom: 4 },
-  weekdayCell: { textAlign: "center", fontSize: 11, color: "#B4A296", fontWeight: 600, padding: "4px 0" },
+  weekdayCell: { textAlign: "center", color: "#B4A296", fontWeight: 600, padding: "4px 0" },
 
   monthGrid: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 },
   dayCell: {
@@ -2196,10 +2208,10 @@ const styles = {
     padding: "4px 2px", gap: 3, position: "relative",
   },
   dayCellToday: { borderColor: "#7A2E3D", borderWidth: 2 },
-  dayCellNum: { fontSize: 13, fontWeight: 500, color: "#2B1B1F" },
+  dayCellNum: { fontWeight: 500, color: "#2B1B1F" },
   dayCellNumToday: { color: "#7A2E3D", fontWeight: 700 },
   dayCellDots: { display: "flex", gap: 2, minHeight: 6 },
-  dayDot: { width: 5, height: 5, borderRadius: "50%" },
+  dayDot: { borderRadius: "50%" },
 
   backLink: {
     display: "flex", alignItems: "center", gap: 2, border: "none", background: "none",
