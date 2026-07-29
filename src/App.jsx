@@ -209,6 +209,17 @@ function findOverlap(appointments, staffId, date, time, duration, excludeId) {
   );
 }
 
+// Da li je termin naplaćen — ili ima svoju cenu, ili pripada povezanoj grupi
+// (npr. pauza kod bojenja) gde je cena upisana na drugom delu.
+function isApptPaid(appt, allAppts) {
+  const hasOwnPrice = appt.price !== "" && appt.price !== null && appt.price !== undefined && !isNaN(appt.price);
+  if (hasOwnPrice) return true;
+  if (!appt.groupId) return false;
+  return allAppts.some(
+    (g) => g.groupId === appt.groupId && g.id !== appt.id && g.price !== "" && g.price !== null && g.price !== undefined && !isNaN(g.price)
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /* Root component                                                     */
 /* ------------------------------------------------------------------ */
@@ -827,7 +838,10 @@ function DayTimelineView({
   const key = dateKey(selectedDate);
 
   const dayAppts = useMemo(() => appointments.filter((a) => a.date === key), [appointments, key]);
-  const dayTotal = dayAppts.reduce((sum, a) => sum + (a.blocked ? 0 : Number(a.price) || 0), 0);
+
+  const filteredDayAppts = staffFilter === "all" ? dayAppts : dayAppts.filter((a) => a.staff === staffFilter);
+  const dayTotal = filteredDayAppts.reduce((sum, a) => sum + (a.blocked ? 0 : Number(a.price) || 0), 0);
+  const unpaidCount = filteredDayAppts.filter((a) => !a.blocked && !isApptPaid(a, dayAppts)).length;
 
   const columns = staffFilter === "all" ? employees : [staffById(staffFilter, employees)];
   const wide = columns.length === 1;
@@ -885,7 +899,14 @@ function DayTimelineView({
       </div>
 
       <div style={styles.dayTotalRow}>
-        <span style={styles.dayTotalLabel}>{dayAppts.length} {dayAppts.length === 1 ? "termin" : "termina"}</span>
+        <span style={styles.dayTotalLabel}>
+          {filteredDayAppts.length} {filteredDayAppts.length === 1 ? "termin" : "termina"}
+          {unpaidCount > 0 && (
+            <span style={styles.dayTotalUnpaid}>
+              {" "}(<AlertTriangle size={11} style={{ verticalAlign: "-1px" }} /> {unpaidCount} nenaplaćeno)
+            </span>
+          )}
+        </span>
         <span style={styles.dayTotalValue}>{formatMoney(dayTotal)}</span>
       </div>
 
@@ -2148,6 +2169,7 @@ const styles = {
     padding: "6px 2px 12px", borderBottom: "1px dashed #D9C9B4",
   },
   dayTotalLabel: { fontSize: 12.5, color: "#8A7368" },
+  dayTotalUnpaid: { color: "#A13A3A", fontWeight: 600 },
   dayTotalValue: { fontFamily: FONT_MONO, fontSize: 15, fontWeight: 500, color: "#7A2E3D" },
   confirmMoveCard: {
     background: "#FBF6EE", borderRadius: 14, padding: "22px 20px", maxWidth: 380, width: "100%",

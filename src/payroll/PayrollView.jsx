@@ -404,7 +404,7 @@ function CalculationTab({ appointments, employees, user }) {
   );
 }
 
-function EmployeeCard({ result }) {
+function EmployeeCard({ result, run }) {
   const isCommission = result.calcType === "commission";
   const isMaterial = result.calcType === "material_deduction";
 
@@ -459,11 +459,20 @@ function EmployeeCard({ result }) {
       ) : (
         <p style={styles.emptyLine}>Nema naplaćenih usluga u ovom periodu.</p>
       )}
+
+      {run && (
+        <button
+          style={styles.downloadPdfBtn}
+          onClick={() => downloadBlob(buildEmployeePdf(run, result), `Obracun_${run.label.replace(/\s+/g, "_")}_${result.name}.pdf`)}
+        >
+          <FileDown size={14} /> Preuzmi PDF
+        </button>
+      )}
     </div>
   );
 }
 
-function RecapCard({ recap, results }) {
+function RecapCard({ recap, results, run }) {
   return (
     <div style={styles.recapCard}>
       <Stat label="Ukupan promet salona" value={formatMoney(recap.totalRevenue)} highlight big />
@@ -505,6 +514,14 @@ function RecapCard({ recap, results }) {
         <span>Preostali iznos (za salon)</span>
         <span style={styles.recapValueFinal}>{formatMoney(recap.remainingForSalon)}</span>
       </div>
+      {run && (
+        <button
+          style={styles.downloadPdfBtn}
+          onClick={() => downloadBlob(buildRecapPdf(run, results, recap), `Obracun_${run.label.replace(/\s+/g, "_")}_Rekapitulacija.pdf`)}
+        >
+          <FileDown size={14} /> Preuzmi PDF
+        </button>
+      )}
     </div>
   );
 }
@@ -672,9 +689,9 @@ function HistoryTab({ employees }) {
             {expandedId === run.id && (
               <div style={styles.historyExpanded}>
                 {(run.results || []).map((r) => (
-                  <EmployeeCard key={r.employeeId} result={r} />
+                  <EmployeeCard key={r.employeeId} result={r} run={run} />
                 ))}
-                {run.recap && <RecapCard recap={run.recap} results={run.results} />}
+                {run.recap && <RecapCard recap={run.recap} results={run.results} run={run} />}
                 {run.pdfPaths &&
                   (run.results || []).map((r) => (
                     <a key={r.employeeId} style={styles.pdfLink} href={run.pdfPaths[r.employeeId]} target="_blank" rel="noreferrer">
@@ -831,6 +848,11 @@ const styles = {
   recapValue: { fontFamily: FONT_MONO },
   recapRowFinal: { display: "flex", justifyContent: "space-between", fontSize: 15.5, fontWeight: 700, color: "#7A2E3D", padding: "4px 0" },
   recapValueFinal: { fontFamily: FONT_MONO, fontSize: 16 },
+  downloadPdfBtn: {
+    display: "flex", alignItems: "center", justifyContent: "center", gap: 6, width: "100%",
+    marginTop: 14, border: "1px solid #E8DCC8", background: "#FBF6EE", color: "#7A2E3D",
+    borderRadius: 8, padding: "9px 14px", fontSize: 12.5, fontWeight: 600,
+  },
 
   finalizeBtn: { width: "100%", border: "none", background: "#A13A3A", color: "#FBF6EE", borderRadius: 10, padding: "13px", fontSize: 14, fontWeight: 600, marginTop: 6 },
   finalizeBtnSmall: { border: "none", background: "#A13A3A", color: "#FBF6EE", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 },
