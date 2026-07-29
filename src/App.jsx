@@ -1066,6 +1066,7 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, clickableHeader, o
           return (
             <button
               key={a.id}
+              className={showUnpaidFlag ? "unpaid-pulse" : undefined}
               onClick={() => onEditAppt(a.id)}
               draggable
               onDragStart={(e) => {
@@ -1078,6 +1079,7 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, clickableHeader, o
                 height: blockHeight,
                 background: a.blocked ? undefined : staff.color,
                 ...(a.blocked ? styles.apptBlockBlocked : {}),
+                ...(showUnpaidFlag ? styles.apptBlockUnpaid : {}),
               }}
             >
               {showUnpaidFlag && (
@@ -2082,6 +2084,12 @@ function GlobalStyle() {
       .modal-overlay { align-items: flex-end; }
       .modal-card { border-radius: 16px 16px 0 0; }
 
+      @keyframes unpaid-pulse-anim {
+        0%, 100% { box-shadow: 0 2px 4px rgba(43,27,31,0.22), 0 0 0 0 rgba(161,58,58,0.5); }
+        50% { box-shadow: 0 2px 4px rgba(43,27,31,0.22), 0 0 5px 1px rgba(161,58,58,0.85); }
+      }
+      .unpaid-pulse { animation: unpaid-pulse-anim 2.2s ease-in-out infinite; }
+
       @media (min-width: 900px) {
         .app-root { max-width: 1100px; }
         .day-cell { aspect-ratio: 4 / 3; }
@@ -2208,6 +2216,7 @@ const styles = {
   apptBlockBlocked: {
     background: "repeating-linear-gradient(45deg, #A8927F, #A8927F 6px, #96806D 6px, #96806D 12px)",
   },
+  apptBlockUnpaid: { border: "2px solid #A13A3A" },
   apptBlockService: { fontSize: 11, fontWeight: 700, color: "#FBF6EE", lineHeight: 1.15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" },
   apptBlockClient: { fontSize: 10.5, color: "rgba(251,246,238,0.9)", lineHeight: 1.15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" },
   apptBlockPrice: { fontFamily: FONT_MONO, fontSize: 10, color: "rgba(251,246,238,0.95)", lineHeight: 1.15 },
