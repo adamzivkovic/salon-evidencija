@@ -806,20 +806,44 @@ function MonthView({ appointments, employees, selectedDate, setSelectedDate, onS
 /* Day timeline view                                                   */
 /* ------------------------------------------------------------------ */
 
+// ESC ili "nazad" (telefon/browser) zatvara otvoren modal/prozor — umesto da
+// izađe iz aplikacije, samo zatvara dijalog i vraća na prethodni prikaz.
+// Radi tako što pri otvaranju modala ubacimo jedan "korak" u istoriju
+// browsera; kad se on skine (bilo pravim "nazad", bilo našim zatvaranjem),
+// modal se zatvara. Time se istorija ne "kvari" bez obzira kako se zatvorilo.
+function useModalDismissal(onClose) {
+  const closingRef = useRef(false);
+
+  const requestClose = () => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    window.history.back();
+  };
+
+  useEffect(() => {
+    window.history.pushState({ modalOpen: true }, "");
+    const handlePop = () => {
+      closingRef.current = true;
+      onClose();
+    };
+    const handleKey = (e) => {
+      if (e.key === "Escape") requestClose();
+    };
+    window.addEventListener("popstate", handlePop);
+    window.addEventListener("keydown", handleKey);
+    return () => {
+      window.removeEventListener("popstate", handlePop);
+      window.removeEventListener("keydown", handleKey);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return requestClose;
+}
+
 // Prati da li je ekran "desktop" širine (isti prag kao CSS media query za
 // .app-root) — koristi se da odlučimo da li ime klijenta staje u zagradi
 // pored usluge na vremenskoj osi.
-// ESC zatvara otvoren modal/prozor (radi kao klik na Otkaži/X).
-function useEscapeToClose(onClose) {
-  useEffect(() => {
-    const handler = (e) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
-}
-
 function useIsDesktop() {
   const [isDesktop, setIsDesktop] = useState(() => typeof window !== "undefined" && window.innerWidth >= 900);
   useEffect(() => {
@@ -867,8 +891,24 @@ function DayTimelineView({
     setPendingMove(null);
   };
 
+  const touchStart = useRef(null);
+  const handleTouchStart = (e) => {
+    const t = e.touches[0];
+    touchStart.current = { x: t.clientX, y: t.clientY };
+  };
+  const handleTouchEnd = (e) => {
+    if (!touchStart.current) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touchStart.current.x;
+    const dy = t.clientY - touchStart.current.y;
+    touchStart.current = null;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      setSelectedDate((d) => addDays(d, dx < 0 ? 1 : -1));
+    }
+  };
+
   return (
-    <div style={styles.dayViewWrap}>
+    <div style={styles.dayViewWrap} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
       <button style={styles.backLink} onClick={onBack}>
         <ChevronLeft size={15} />
         <span>{MONTH_NAMES[selectedDate.getMonth()]} {selectedDate.getFullYear()}.</span>
@@ -1117,7 +1157,7 @@ function ApptForm({
   initial, prefill, defaultDate, appointments, employees, services, onAddService, onUpdateService, onDeleteService,
   clients, onSaveClientNote, onClose, onSave, onDelete,
 }) {
-  useEscapeToClose(onClose);
+  const requestClose = useModalDismissal(onClose);
   const [date, setDate] = useState(initial?.date || prefill?.date || dateKey(defaultDate));
   const [time, setTime] = useState(initial?.time || prefill?.time || "");
   const [useCustomTime, setUseCustomTime] = useState(
@@ -1199,6 +1239,7 @@ function ApptForm({
       blocked,
       linkToId: isContinuation && linkToId ? linkToId : null,
     });
+    requestClose();
   };
 
   return (
@@ -1206,7 +1247,7 @@ function ApptForm({
       <div className="modal-card" style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHeader}>
           <span style={styles.modalTitle}>{initial ? "Izmeni zakazivanje" : "Novo zakazivanje"}</span>
-          <button style={styles.iconBtn} onClick={onClose} aria-label="Zatvori">
+          <button style={styles.iconBtn} onClick={requestClose} aria-label="Zatvori">
             <X size={20} />
           </button>
         </div>
@@ -1442,13 +1483,13 @@ function ApptForm({
 
         <div style={styles.modalFooter}>
           {onDelete && (
-            <button style={styles.deleteBtn} onClick={onDelete}>
+            <button style={styles.deleteBtn} onClick={() => { onDelete(); requestClose(); }}>
               <Trash2 size={16} />
               <span>Obriši</span>
             </button>
           )}
           <div style={{ flex: 1 }} />
-          <button style={styles.cancelBtn} onClick={onClose}>Otkaži</button>
+          <button style={styles.cancelBtn} onClick={requestClose}>Otkaži</button>
           <button style={{ ...styles.saveBtn, opacity: canSave ? 1 : 0.5 }} onClick={handleSave} disabled={!canSave}>
             Sačuvaj
           </button>
@@ -1469,7 +1510,7 @@ function ApptForm({
 }
 
 function ServicesManager({ services, onAdd, onUpdate, onDelete, onClose }) {
-  useEscapeToClose(onClose);
+  const requestClose = useModalDismissal(onClose);
   const [newName, setNewName] = useState("");
   const [newDuration, setNewDuration] = useState(30);
 
@@ -1487,7 +1528,7 @@ function ServicesManager({ services, onAdd, onUpdate, onDelete, onClose }) {
       <div className="modal-card" style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHeader}>
           <span style={styles.modalTitle}>Uredi usluge</span>
-          <button style={styles.iconBtn} onClick={onClose} aria-label="Zatvori">
+          <button style={styles.iconBtn} onClick={requestClose} aria-label="Zatvori">
             <X size={20} />
           </button>
         </div>
@@ -1522,7 +1563,7 @@ function ServicesManager({ services, onAdd, onUpdate, onDelete, onClose }) {
         </div>
         <div style={styles.modalFooter}>
           <div style={{ flex: 1 }} />
-          <button style={styles.saveBtn} onClick={onClose}>Gotovo</button>
+          <button style={styles.saveBtn} onClick={requestClose}>Gotovo</button>
         </div>
       </div>
     </div>
@@ -1661,7 +1702,7 @@ function ClientsView({ clients, onSave, onDelete }) {
 }
 
 function ClientForm({ initial, onClose, onSave, onDelete }) {
-  useEscapeToClose(onClose);
+  const requestClose = useModalDismissal(onClose);
   const [name, setName] = useState(initial?.name || "");
   const [phone, setPhone] = useState(initial?.phone || "");
   const [note, setNote] = useState(initial?.note || "");
@@ -1673,7 +1714,7 @@ function ClientForm({ initial, onClose, onSave, onDelete }) {
       <div className="modal-card" style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHeader}>
           <span style={styles.modalTitle}>{initial ? "Izmeni klijenta" : "Novi klijent"}</span>
-          <button style={styles.iconBtn} onClick={onClose} aria-label="Zatvori">
+          <button style={styles.iconBtn} onClick={requestClose} aria-label="Zatvori">
             <X size={20} />
           </button>
         </div>
@@ -1714,14 +1755,14 @@ function ClientForm({ initial, onClose, onSave, onDelete }) {
 
         <div style={styles.modalFooter}>
           {onDelete && (
-            <button style={styles.deleteBtn} onClick={onDelete}>
+            <button style={styles.deleteBtn} onClick={() => { onDelete(); requestClose(); }}>
               <Trash2 size={16} />
               <span>Obriši</span>
             </button>
           )}
           <div style={{ flex: 1 }} />
-          <button style={styles.cancelBtn} onClick={onClose}>Otkaži</button>
-          <button style={{ ...styles.saveBtn, opacity: canSave ? 1 : 0.5 }} onClick={() => canSave && onSave(name, phone, note)} disabled={!canSave}>
+          <button style={styles.cancelBtn} onClick={requestClose}>Otkaži</button>
+          <button style={{ ...styles.saveBtn, opacity: canSave ? 1 : 0.5 }} onClick={() => { if (canSave) { onSave(name, phone, note); requestClose(); } }} disabled={!canSave}>
             Sačuvaj
           </button>
         </div>
@@ -1744,7 +1785,7 @@ const PERIODS = [
 /* ------------------------------------------------------------------ */
 
 function LoginModal({ onClose, onLogin, error, loading }) {
-  useEscapeToClose(onClose);
+  const requestClose = useModalDismissal(onClose);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
@@ -1760,7 +1801,7 @@ function LoginModal({ onClose, onLogin, error, loading }) {
       <div className="modal-card" style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHeader}>
           <span style={styles.modalTitle}>Prijava — Obračun zarada</span>
-          <button style={styles.iconBtn} onClick={onClose} aria-label="Zatvori">
+          <button style={styles.iconBtn} onClick={requestClose} aria-label="Zatvori">
             <X size={20} />
           </button>
         </div>
@@ -1791,7 +1832,7 @@ function LoginModal({ onClose, onLogin, error, loading }) {
         </div>
         <div style={styles.modalFooter}>
           <div style={{ flex: 1 }} />
-          <button style={styles.cancelBtn} onClick={onClose}>Otkaži</button>
+          <button style={styles.cancelBtn} onClick={requestClose}>Otkaži</button>
           <button style={{ ...styles.saveBtn, opacity: canSubmit ? 1 : 0.5 }} onClick={handleSubmit} disabled={!canSubmit}>
             {loading ? "Prijavljivanje…" : "Prijavi se"}
           </button>
