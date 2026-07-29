@@ -1201,7 +1201,16 @@ function ApptForm({
   );
   const [useCustom, setUseCustom] = useState(initial ? !isKnownService(initial.service) : false);
   const [manageOpen, setManageOpen] = useState(false);
-  const [client, setClient] = useState(initial?.client || "");
+  const [client, setClient] = useState(() => {
+    if (initial?.client) return initial.client;
+    if (initial?.groupId) {
+      const sibling = appointments.find(
+        (a) => a.groupId === initial.groupId && a.id !== initial.id && a.client
+      );
+      if (sibling) return sibling.client;
+    }
+    return "";
+  });
   const [editingNote, setEditingNote] = useState(false);
   const [noteDraft, setNoteDraft] = useState("");
   const [phoneDraft, setPhoneDraft] = useState("");
