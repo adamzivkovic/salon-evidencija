@@ -1092,20 +1092,32 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, clickableHeader, o
           const hasOwnPrice = a.price !== "" && a.price !== null && a.price !== undefined && !isNaN(a.price);
 
           const group = a.groupId ? groupInfo[a.groupId] : null;
-          const groupTag = group && group.length > 1 ? ` (${group.findIndex((g) => g.id === a.id) + 1}/${group.length})` : "";
+          const groupIndexLabel = group && group.length > 1 ? `(${group.findIndex((g) => g.id === a.id) + 1}/${group.length})` : "";
+          const groupTag = groupIndexLabel ? ` ${groupIndexLabel}` : "";
           const siblingHasPrice = group ? group.some((g) => g.id !== a.id && g.price !== "" && g.price !== null && g.price !== undefined && !isNaN(g.price)) : false;
           const isPaid = hasOwnPrice || siblingHasPrice;
           const priceText = hasOwnPrice ? formatMoney(a.price) : siblingHasPrice ? "Naplaćeno" : "Nije naplaćeno";
           const showUnpaidFlag = !a.blocked && !isPaid;
 
+          // Ime klijenta se prikazuje na svim povezanim delovima iste usluge,
+          // čak i ako je uneto samo na jednom od njih.
+          const displayClient = group ? a.client || group.map((g) => g.client).find(Boolean) || "" : a.client;
+
           // Koliko redova teksta stane u blok, zavisno od njegove visine (trajanja usluge).
           const showClientLine = blockHeight >= 46;
           const showPrice = blockHeight >= 30;
-          const showInlineClient = isDesktop && !showClientLine && showPrice && a.client;
+          const showInlineClient = isDesktop && !showClientLine && showPrice && displayClient;
           // Na telefonu, kad je termin nenaplaćen (već upadljivo obeležen crvenim okvirom
           // i ikonicom), nema potrebe da tekst "Nije naplaćeno" oduzima red — umesto toga
           // pokaži ime klijenta na drugom redu, kao kod naplaćenih termina.
           const mobileUnpaidCompact = !isDesktop && showUnpaidFlag;
+          // Na telefonu, kad su termini povezani (npr. pauza kod bojenja) i ima dovoljno
+          // mesta, izdvoji ikonicu+redni broj u svoj red, pa uslugu, pa klijenta.
+          const useGroupedMobileLayout = !isDesktop && group && group.length > 1 && showClientLine;
+          // Ako termin dovoljno dugo traje da ima vertikalnog prostora, dozvoli da se
+          // (na telefonu) naziv usluge prelomi u više redova umesto da se skrati sa "...".
+          const allowServiceWrap = !isDesktop && blockHeight >= 70;
+          const serviceStyle = allowServiceWrap ? { ...styles.apptBlockService, ...styles.apptBlockServiceWrap } : styles.apptBlockService;
 
           return (
             <button
@@ -1133,19 +1145,25 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, clickableHeader, o
               )}
               {a.blocked ? (
                 <>
-                  <span style={styles.apptBlockService}>🚫 Blokirano</span>
-                  {showClientLine && a.client && <span style={styles.apptBlockClient}>{a.client}</span>}
+                  <span style={serviceStyle}>🚫 Blokirano</span>
+                  {showClientLine && displayClient && <span style={styles.apptBlockClient}>{displayClient}</span>}
+                </>
+              ) : useGroupedMobileLayout ? (
+                <>
+                  <span style={styles.apptBlockGroupTag}>🔗 {groupIndexLabel}</span>
+                  <span style={serviceStyle}>{a.service}</span>
+                  {displayClient && <span style={styles.apptBlockClient}>{displayClient}</span>}
                 </>
               ) : (
                 <>
-                  <span style={styles.apptBlockService}>
-                    {a.groupId ? "🔗 " : ""}{a.service}{groupTag}{showInlineClient ? ` (${a.client})` : ""}
+                  <span style={serviceStyle}>
+                    {a.groupId ? "🔗 " : ""}{a.service}{groupTag}{showInlineClient ? ` (${displayClient})` : ""}
                   </span>
                   {mobileUnpaidCompact ? (
-                    showPrice && a.client && <span style={styles.apptBlockClient}>{a.client}</span>
+                    showPrice && displayClient && <span style={styles.apptBlockClient}>{displayClient}</span>
                   ) : (
                     <>
-                      {showClientLine && a.client && <span style={styles.apptBlockClient}>{a.client}</span>}
+                      {showClientLine && displayClient && <span style={styles.apptBlockClient}>{displayClient}</span>}
                       {showPrice && <span style={styles.apptBlockPrice}>{priceText}</span>}
                     </>
                   )}
@@ -2271,6 +2289,8 @@ const styles = {
   },
   apptBlockUnpaid: { border: "2px solid #A13A3A" },
   apptBlockService: { fontSize: 11, fontWeight: 700, color: "#FBF6EE", lineHeight: 1.15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" },
+  apptBlockServiceWrap: { whiteSpace: "normal", wordBreak: "break-word", overflow: "visible", textOverflow: "clip" },
+  apptBlockGroupTag: { fontSize: 10, fontWeight: 700, color: "rgba(251,246,238,0.95)", lineHeight: 1.15, letterSpacing: 0.2 },
   apptBlockClient: { fontSize: 10.5, color: "rgba(251,246,238,0.9)", lineHeight: 1.15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" },
   apptBlockPrice: { fontFamily: FONT_MONO, fontSize: 10, color: "rgba(251,246,238,0.95)", lineHeight: 1.15 },
   unpaidFlag: { position: "absolute", top: 2, right: 3, lineHeight: 0, filter: "drop-shadow(0 1px 1px rgba(0,0,0,0.35))" },
