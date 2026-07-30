@@ -247,6 +247,7 @@ export default function SalonApp() {
   const [loginOpen, setLoginOpen] = useState(false);
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
+  const [loginPurpose, setLoginPurpose] = useState(null); // 'payroll' | 'reset'
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -376,7 +377,12 @@ export default function SalonApp() {
     try {
       await signInWithEmailAndPassword(auth, email, password);
       setLoginOpen(false);
-      setView("payroll");
+      if (loginPurpose === "reset") {
+        handleImportData({ appointments: [], clients: [] });
+      } else {
+        setView("payroll");
+      }
+      setLoginPurpose(null);
     } catch (e) {
       setLoginError("Pogrešno korisničko ime ili šifra.");
     } finally {
@@ -391,7 +397,17 @@ export default function SalonApp() {
 
   const openPayroll = () => {
     if (user) setView("payroll");
-    else setLoginOpen(true);
+    else {
+      setLoginPurpose("payroll");
+      setLoginOpen(true);
+    }
+  };
+
+  // Brisanje svih podataka je nepovratna akcija, pa uvek iznova traži prijavu
+  // (bez obzira da li je korisnik već ulogovan zbog Obračuna).
+  const requestSecureReset = () => {
+    setLoginPurpose("reset");
+    setLoginOpen(true);
   };
 
   /* ---- appointment CRUD ---- */
@@ -576,14 +592,17 @@ export default function SalonApp() {
           clients={clients}
           onImportData={handleImportData}
           onOpenPayroll={openPayroll}
+          onRequestSecureReset={requestSecureReset}
         />
       )}
 
       {loginOpen && (
         <LoginModal
+          purpose={loginPurpose}
           onClose={() => {
             setLoginOpen(false);
             setLoginError("");
+            setLoginPurpose(null);
           }}
           onLogin={handleLogin}
           error={loginError}
@@ -1821,7 +1840,7 @@ const PERIODS = [
 /* Login & payroll (obračun zarada)                                    */
 /* ------------------------------------------------------------------ */
 
-function LoginModal({ onClose, onLogin, error, loading }) {
+function LoginModal({ purpose, onClose, onLogin, error, loading }) {
   const requestClose = useModalDismissal(onClose);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -1837,12 +1856,19 @@ function LoginModal({ onClose, onLogin, error, loading }) {
     <div className="modal-overlay" style={styles.modalOverlay}>
       <div className="modal-card" style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHeader}>
-          <span style={styles.modalTitle}>Prijava — Obračun zarada</span>
+          <span style={styles.modalTitle}>
+            {purpose === "reset" ? "Prijava — Potvrda brisanja podataka" : "Prijava — Obračun zarada"}
+          </span>
           <button style={styles.iconBtn} onClick={requestClose} aria-label="Zatvori">
             <X size={20} />
           </button>
         </div>
         <div style={styles.modalBody}>
+          {purpose === "reset" && (
+            <p style={styles.resetLoginWarning}>
+              Za potvrdu brisanja svih podataka potrebna je prijava, čak i ako si već prijavljen/a zbog Obračuna.
+            </p>
+          )}
           <div style={styles.fieldRow}>
             <label style={styles.label}>Korisničko ime (email)</label>
             <input
@@ -1883,7 +1909,7 @@ function LoginModal({ onClose, onLogin, error, loading }) {
 /* Stats view                                                          */
 /* ------------------------------------------------------------------ */
 
-function StatsView({ appointments, employees, clients, onImportData, onOpenPayroll }) {
+function StatsView({ appointments, employees, clients, onImportData, onOpenPayroll, onRequestSecureReset }) {
   const fileInputRef = useRef(null);
   const [period, setPeriod] = useState("day");
   const [customFrom, setCustomFrom] = useState(dateKey(startOfMonth(new Date())));
@@ -2002,7 +2028,7 @@ function StatsView({ appointments, employees, clients, onImportData, onOpenPayro
     const ok = window.confirm(
       `Ovo će TRAJNO obrisati sve podatke iz aplikacije (${appointments.length} zakazivanja i ${clients.length} klijenata). Preporučujemo da prvo klikneš "Izvezi bekap" ako želiš da sačuvaš probne unose. Nastaviti sa brisanjem?`
     );
-    if (ok) onImportData({ appointments: [], clients: [] });
+    if (ok) onRequestSecureReset();
   };
 
   return (
@@ -2364,6 +2390,10 @@ const styles = {
     marginLeft: "auto",
   },
   loginError: { color: "#A13A3A", fontSize: 12.5, margin: "-4px 0 0" },
+  resetLoginWarning: {
+    fontSize: 12.5, color: "#8A6216", background: "#FBF3E4", border: "1px solid #E8D2A0",
+    borderRadius: 8, padding: "9px 12px", margin: "0 0 16px", lineHeight: 1.5,
+  },
 
   payrollWrap: { padding: "14px 18px 30px" },
   payrollCard: {
