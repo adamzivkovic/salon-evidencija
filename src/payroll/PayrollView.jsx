@@ -1,11 +1,11 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, serverTimestamp,
 } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { db, storage } from "../firebase";
 import { APP_PIN } from "../appLock";
-import { ChevronLeft, Lock, LogOut, Loader2, FileDown, Eye, Ban, AlertTriangle, Trash2 } from "lucide-react";
+import { ChevronLeft, Lock, LogOut, Loader2, FileDown, Eye, Ban, AlertTriangle, Trash2, CalendarDays } from "lucide-react";
 import { calculatePayroll } from "./calculations";
 import { buildEmployeePdf, buildRecapPdf } from "./pdf";
 import { MONTH_NAMES, formatMoney, formatDateSr, monthLabel, periodForMonth, dateKey } from "./utils";
@@ -32,6 +32,38 @@ function downloadBlob(blob, filename) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+// Zamena za <input type="date"> koja UVEK prikazuje dd.mm.gggg, bez obzira
+// na jezik uređaja/browsera (nativni prikaz to ne poštuje pouzdano svuda).
+// Klik bilo gde na okvir programski otvara kalendar (showPicker).
+function DateField({ value, onChange, disabled }) {
+  const inputRef = useRef(null);
+
+  const openPicker = () => {
+    if (disabled) return;
+    const el = inputRef.current;
+    if (!el) return;
+    if (typeof el.showPicker === "function") {
+      try {
+        el.showPicker();
+      } catch (e) {
+        el.focus();
+      }
+    } else {
+      el.focus();
+    }
+  };
+
+  return (
+    <div style={styles.dateFieldWrap} onClick={openPicker}>
+      <input ref={inputRef} type="date" value={value} onChange={onChange} disabled={disabled} style={styles.dateFieldNative} />
+      <div style={{ ...styles.dateFieldDisplay, ...(disabled ? styles.dateFieldDisplayDisabled : {}) }}>
+        <span>{value ? formatDateSr(value) : "dd.mm.gggg."}</span>
+        <CalendarDays size={15} color="#8A7368" />
+      </div>
+    </div>
+  );
 }
 
 function withTimeout(promise, ms) {
@@ -273,11 +305,11 @@ function CalculationTab({ appointments, employees, user }) {
           <div style={styles.fieldRowHalf}>
             <div style={styles.fieldRow}>
               <label style={styles.label}>Od</label>
-              <input type="date" value={customFrom} onChange={(e) => { setCustomFrom(e.target.value); resetToDraft(); }} style={styles.input} disabled={status === "closed"} />
+              <DateField value={customFrom} onChange={(e) => { setCustomFrom(e.target.value); resetToDraft(); }} disabled={status === "closed"} />
             </div>
             <div style={styles.fieldRow}>
               <label style={styles.label}>Do</label>
-              <input type="date" value={customTo} onChange={(e) => { setCustomTo(e.target.value); resetToDraft(); }} style={styles.input} disabled={status === "closed"} />
+              <DateField value={customTo} onChange={(e) => { setCustomTo(e.target.value); resetToDraft(); }} disabled={status === "closed"} />
             </div>
           </div>
         )}
@@ -808,6 +840,14 @@ const styles = {
   fieldRow: { marginBottom: 12, flex: 1 },
   label: { display: "block", fontSize: 12, color: "#8A7368", marginBottom: 5, fontWeight: 500 },
   input: { width: "100%", padding: "9px 11px", borderRadius: 8, border: "1px solid #E8DCC8", background: "#FFFDF9", fontSize: 13.5, color: "#2B1B1F" },
+  dateFieldWrap: { position: "relative", flex: 1 },
+  dateFieldNative: { position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer", border: "none", padding: 0, pointerEvents: "none" },
+  dateFieldDisplay: {
+    width: "100%", padding: "9px 11px", borderRadius: 8, border: "1px solid #E8DCC8",
+    background: "#FFFDF9", fontSize: 13.5, color: "#2B1B1F", boxSizing: "border-box",
+    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, pointerEvents: "none",
+  },
+  dateFieldDisplayDisabled: { color: "#B4A296", background: "#F5EFE4" },
   periodPreview: { fontFamily: FONT_MONO, fontSize: 13, color: "#7A2E3D", fontWeight: 600, marginTop: 4 },
 
   paramRow: { display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid #F2E9DB" },

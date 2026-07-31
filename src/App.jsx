@@ -148,6 +148,16 @@ function formatMoney(n) {
   return `${Number(n).toLocaleString("sr-RS")} din`;
 }
 
+// Prikaz datuma uvek u srpskom formatu (dd.mm.gggg.), bez obzira na jezik
+// uređaja/browsera — nativni <input type="date"> ne poštuje uvek jezik
+// stranice za svoj prikaz (npr. Chrome ignoriše lang="sr").
+function formatDateInputDisplay(value) {
+  if (!value) return "";
+  const [y, m, d] = value.split("-");
+  if (!y || !m || !d) return "";
+  return `${d}.${m}.${y}.`;
+}
+
 function formatDuration(min) {
   const m = Number(min);
   if (!m) return "";
@@ -1023,6 +1033,47 @@ function DayTimelineView({
   );
 }
 
+// Zamena za <input type="date"> koja UVEK prikazuje dd.mm.gggg — nativno
+// polje ostaje potpuno funkcionalno (isti kalendar/picker), samo je vizuelno
+// sakriveno, a preko njega stoji naš sopstveni, dosledan prikaz datuma. Klik
+// bilo gde na okvir programski otvara kalendar (showPicker), da ne zavisi od
+// toga da li se pogodi tačna, nevidljiva zona pravе ikonice.
+function DateField({ value, onChange, disabled }) {
+  const inputRef = useRef(null);
+
+  const openPicker = () => {
+    if (disabled) return;
+    const el = inputRef.current;
+    if (!el) return;
+    if (typeof el.showPicker === "function") {
+      try {
+        el.showPicker();
+      } catch (e) {
+        el.focus();
+      }
+    } else {
+      el.focus();
+    }
+  };
+
+  return (
+    <div style={styles.dateFieldWrap} onClick={openPicker}>
+      <input
+        ref={inputRef}
+        type="date"
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+        style={styles.dateFieldNative}
+      />
+      <div style={{ ...styles.dateFieldDisplay, ...(disabled ? styles.dateFieldDisplayDisabled : {}) }}>
+        <span>{value ? formatDateInputDisplay(value) : "dd.mm.gggg."}</span>
+        <CalendarDays size={15} color="#8A7368" />
+      </div>
+    </div>
+  );
+}
+
 function RibbonTab({ label, active, color, onClick }) {
   return (
     <button
@@ -1312,7 +1363,7 @@ function ApptForm({
           <div style={styles.fieldRowHalf}>
             <div style={styles.fieldRow}>
               <label style={styles.label}>Datum</label>
-              <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={styles.input} />
+              <DateField value={date} onChange={(e) => setDate(e.target.value)} />
             </div>
             <div style={styles.fieldRow}>
               <label style={styles.label}>Vreme</label>
@@ -2051,9 +2102,9 @@ function StatsView({ appointments, employees, clients, onImportData, onOpenPayro
 
       {period === "custom" && (
         <div style={styles.customRangeRow}>
-          <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} style={styles.input} />
+          <DateField value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
           <span style={styles.toLabel}>do</span>
-          <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} style={styles.input} />
+          <DateField value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
         </div>
       )}
 
@@ -2365,6 +2416,14 @@ const styles = {
     width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #E8DCC8",
     background: "#FFFDF9", fontSize: 14.5, color: "#2B1B1F",
   },
+  dateFieldWrap: { position: "relative", flex: 1 },
+  dateFieldNative: { position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer", border: "none", padding: 0, pointerEvents: "none" },
+  dateFieldDisplay: {
+    width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #E8DCC8",
+    background: "#FFFDF9", fontSize: 14.5, color: "#2B1B1F", boxSizing: "border-box",
+    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, pointerEvents: "none",
+  },
+  dateFieldDisplayDisabled: { color: "#B4A296", background: "#F5EFE4" },
   staffChoiceRow: { display: "flex", gap: 8 },
   blockedCheckRow: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#5A473F", cursor: "pointer" },
   overlapWarning: {
