@@ -2363,7 +2363,7 @@ const styles = {
     position: "absolute", left: 0, right: 0, border: "none", background: "transparent", padding: 0,
     display: "flex", alignItems: "center", justifyContent: "center",
   },
-  slotGhostTime: { fontSize: 10, fontFamily: FONT_MONO, color: "rgba(122,46,61,0.16)", pointerEvents: "none" },
+  slotGhostTime: { fontSize: 10, fontFamily: FONT_MONO, color: "rgba(122,46,61,0.32)", pointerEvents: "none" },
   apptBlock: {
     position: "absolute", left: 2, right: 2, borderRadius: 6, border: "1px solid rgba(255,255,255,0.4)",
     padding: "2px 5px", display: "flex", flexDirection: "column", alignItems: "flex-start",
