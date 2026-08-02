@@ -11,8 +11,8 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Cell, LabelList,
 } from "recharts";
 import {
-  Plus, X, ChevronLeft, ChevronRight, Scissors, Trash2,
-  CalendarDays, BarChart3, Banknote, Users, Download, Upload, Pencil, Lock, LogOut, AlertTriangle,
+  Plus, X, ChevronLeft, ChevronRight, Trash2,
+  CalendarDays, BarChart3, Banknote, Users, Download, Upload, Pencil, Lock, LogOut, AlertTriangle, Settings, Maximize2,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -22,18 +22,18 @@ import {
 // Koristi se samo jednom, da se Firebase baza zaposlenih popuni pri prvom pokretanju.
 // Posle toga se sve čuva u Firestore kolekciji "employees" (uređivanje UI dolazi kasnije).
 const SEED_EMPLOYEES = [
-  { id: "ivana", name: "Ivana", color: "#7A2E3D", calcType: "material_deduction", defaultPercentage: 30, order: 0 },
-  { id: "tamara", name: "Tamara", color: "#C4914B", calcType: "material_deduction", defaultPercentage: 30, order: 1 },
-  { id: "bilja", name: "Bilja", color: "#4A7A6B", calcType: "commission", defaultPercentage: 40, order: 2 },
+  { id: "bilja", name: "Bilja", color: "#4A7A6B", calcType: "commission", defaultPercentage: 40, order: 0 },
+  { id: "ivana", name: "Ivana", color: "#7A2E3D", calcType: "material_deduction", defaultPercentage: 30, order: 1 },
+  { id: "tamara", name: "Tamara", color: "#C4914B", calcType: "material_deduction", defaultPercentage: 30, order: 2 },
 ];
 
-// Redosled prikaza zaposlenih: prvo po "order" polju (ako postoji), a za već
-// postojeće zapise iz baze koji ga još nemaju, po ovoj rezervnoj listi imena —
-// tako se redosled ne menja nasumično bez potrebe da se ručno dira baza.
-const EMPLOYEE_NAME_ORDER_FALLBACK = { Ivana: 0, Tamara: 1, Bilja: 2 };
+// Redosled prikaza zaposlenih: prvo po ovoj listi imena (radi odmah, bez
+// obzira što tvoja baza već ima stare "order" vrednosti sačuvane) — kasnije
+// će postojati podešavanje u Settings da se ovo menja bez izmene koda.
+const EMPLOYEE_NAME_ORDER_FALLBACK = { Bilja: 0, Ivana: 1, Tamara: 2 };
 function employeeSortKey(emp) {
-  if (typeof emp.order === "number") return emp.order;
   if (emp.name in EMPLOYEE_NAME_ORDER_FALLBACK) return EMPLOYEE_NAME_ORDER_FALLBACK[emp.name];
+  if (typeof emp.order === "number") return emp.order;
   return 99;
 }
 
@@ -180,15 +180,15 @@ function slotLabel(i) {
 // 10:00, 10:30, 11:00 ... 20:00 — za padajući meni u formi zakazivanja
 const TIME_OPTIONS = Array.from({ length: TOTAL_SLOTS + 1 }, (_, i) => slotLabel(i));
 
-function apptPosition(appt) {
+function apptPosition(appt, rowHeight = ROW_HEIGHT) {
   const [h, m] = (appt.time || `${WORK_START_HOUR}:00`).split(":").map(Number);
   let start = (h - WORK_START_HOUR) * 60 + (m || 0);
   start = Math.max(0, Math.min(TOTAL_SLOTS * 30, start));
   const dur = Number(appt.duration) || 30;
   let end = Math.max(start + 15, Math.min(TOTAL_SLOTS * 30, start + dur));
   return {
-    top: (start / 30) * ROW_HEIGHT,
-    height: Math.max(((end - start) / 30) * ROW_HEIGHT, 18),
+    top: (start / 30) * rowHeight,
+    height: Math.max(((end - start) / 30) * rowHeight, Math.min(18, rowHeight)),
   };
 }
 
@@ -242,6 +242,7 @@ export default function SalonApp() {
       return false;
     }
   });
+  const isDesktop = useIsDesktop();
   const [appointments, setAppointments] = useState([]);
   const [clients, setClients] = useState([]);
   const [services, setServices] = useState([]);
@@ -258,6 +259,8 @@ export default function SalonApp() {
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginPurpose, setLoginPurpose] = useState(null); // 'payroll' | 'reset'
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [ghostTimeOpacity, setGhostTimeOpacity] = useState(0.32);
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -371,6 +374,29 @@ export default function SalonApp() {
       unsubEmployees();
     };
   }, []);
+
+  /* ---- opšta podešavanja (npr. kontrast "duhova" vremena) ---- */
+  useEffect(() => {
+    const unsub = onSnapshot(
+      doc(db, "settings", "general"),
+      (snap) => {
+        const data = snap.data();
+        if (data && typeof data.ghostTimeOpacity === "number") {
+          setGhostTimeOpacity(data.ghostTimeOpacity);
+        }
+      },
+      () => {}
+    );
+    return unsub;
+  }, []);
+
+  const updateGhostTimeOpacity = (value) => {
+    setGhostTimeOpacity(value);
+    setDoc(doc(db, "settings", "general"), { ghostTimeOpacity: value }, { merge: true }).catch((e) => {
+      console.error(e);
+      setSaveError(true);
+    });
+  };
 
   /* ---- auth (za obračun zarada) ---- */
   useEffect(() => {
@@ -492,6 +518,12 @@ export default function SalonApp() {
       setSaveError(true);
     });
   };
+  const updateEmployee = (id, patch) => {
+    updateDoc(doc(db, COLLECTION_EMPLOYEES, id), patch).catch((e) => {
+      console.error(e);
+      setSaveError(true);
+    });
+  };
   const deleteService = (id) => {
     deleteDoc(doc(db, COLLECTION_SERVICES, id)).catch((e) => {
       console.error(e);
@@ -554,7 +586,7 @@ export default function SalonApp() {
           }}
         />
       ) : (
-      <div className="app-root" style={styles.appRoot}>
+      <div className="app-root" style={{ ...styles.appRoot, paddingBottom: view === "day" && !isDesktop ? 90 : 20 }}>
       <Header view={view} setView={setView} saveError={saveError} />
 
       {!loaded ? (
@@ -579,6 +611,7 @@ export default function SalonApp() {
           selectedDate={selectedDate}
           setSelectedDate={setSelectedDate}
           onBack={() => setView("month")}
+          ghostTimeOpacity={ghostTimeOpacity}
           onSlotClick={(staffId, time) =>
             openNewForm({ date: dateKey(selectedDate), time, staff: staffId })
           }
@@ -603,6 +636,7 @@ export default function SalonApp() {
           onImportData={handleImportData}
           onOpenPayroll={openPayroll}
           onRequestSecureReset={requestSecureReset}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
       )}
 
@@ -620,7 +654,17 @@ export default function SalonApp() {
         />
       )}
 
-      {view === "day" && (
+      {settingsOpen && (
+        <CalendarSettingsModal
+          employees={employees}
+          onUpdateEmployee={updateEmployee}
+          ghostTimeOpacity={ghostTimeOpacity}
+          onUpdateGhostTimeOpacity={updateGhostTimeOpacity}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
+
+      {view === "day" && !isDesktop && (
         <button style={styles.fab} onClick={() => openNewForm({ date: dateKey(selectedDate) })} aria-label="Dodaj zakazivanje">
           <Plus size={26} strokeWidth={2.5} color="#FBF6EE" />
         </button>
@@ -680,13 +724,7 @@ export default function SalonApp() {
 function Header({ view, setView, saveError }) {
   return (
     <div style={styles.header}>
-      <div style={styles.headerTop}>
-        <div style={styles.brandRow}>
-          <Scissors size={20} color="#7A2E3D" strokeWidth={2} />
-          <span style={styles.brandText}>Salon 2CATS · Evidencija</span>
-        </div>
-        {saveError && <span style={styles.saveError}>Čuvanje nije uspelo</span>}
-      </div>
+      {saveError && <div style={styles.saveErrorBanner}>⚠️ Čuvanje nije uspelo — proveri internet konekciju</div>}
       <div style={styles.tabRow}>
         <button
           style={{ ...styles.tabBtn, ...(view === "month" || view === "day" ? styles.tabBtnActive : {}) }}
@@ -720,6 +758,10 @@ function Header({ view, setView, saveError }) {
 
 function MonthView({ appointments, employees, selectedDate, setSelectedDate, onSelectDay }) {
   const [staffFilter, setStaffFilter] = useState("all");
+  const isDesktop = useIsDesktop();
+  const gridRef = useRef(null);
+  const [gridHeight, setGridHeight] = useState(null);
+
   const apptsByDay = useMemo(() => {
     const map = {};
     appointments.forEach((a) => {
@@ -742,6 +784,31 @@ function MonthView({ appointments, employees, selectedDate, setSelectedDate, onS
     }
     return arr;
   }, [selectedDate]);
+
+  // Na desktopu, izračunaj visinu mreže tako da se ceo mesec vidi bez
+  // skrolovanja — meri koliko prostora ostaje do dna ekrana i to dodeli
+  // gridu (redovi se onda ravnomerno dele preko grid-auto-rows: 1fr).
+  useEffect(() => {
+    if (!isDesktop) {
+      setGridHeight(null);
+      return;
+    }
+    const recalc = () => {
+      if (!gridRef.current) return;
+      const top = gridRef.current.getBoundingClientRect().top;
+      const available = window.innerHeight - top - 32;
+      setGridHeight(Math.max(available, 260));
+    };
+    recalc();
+    // Ponovljena provera malo kasnije hvata slučaj da se fontovi učitaju
+    // posle prvog merenja i blago pomere raspored (par piksela).
+    const retry = setTimeout(recalc, 400);
+    window.addEventListener("resize", recalc);
+    return () => {
+      clearTimeout(retry);
+      window.removeEventListener("resize", recalc);
+    };
+  }, [isDesktop, selectedDate]);
 
   const monthLabel = `${MONTH_NAMES[selectedDate.getMonth()][0].toUpperCase()}${MONTH_NAMES[selectedDate.getMonth()].slice(1)} ${selectedDate.getFullYear()}.`;
   const notCurrentMonthReal = !isSameMonth(selectedDate, new Date());
@@ -781,8 +848,6 @@ function MonthView({ appointments, employees, selectedDate, setSelectedDate, onS
         </button>
       </div>
 
-      <div style={styles.swipeHint}>Prevuci levo ili desno za promenu meseca</div>
-
       <div style={styles.ribbonRow}>
         <RibbonTab label="Svi" active={staffFilter === "all"} color="#8A7368" onClick={() => setStaffFilter("all")} />
         {employees.map((s) => (
@@ -796,7 +861,13 @@ function MonthView({ appointments, employees, selectedDate, setSelectedDate, onS
         ))}
       </div>
 
-      <div style={styles.monthGrid}>
+      <div
+        ref={gridRef}
+        style={{
+          ...styles.monthGrid,
+          ...(isDesktop && gridHeight ? { height: gridHeight, gridAutoRows: "minmax(0, 1fr)" } : {}),
+        }}
+      >
         {cells.map((d, i) => {
           const key = dateKey(d);
           const inMonth = isSameMonth(d, selectedDate);
@@ -817,7 +888,6 @@ function MonthView({ appointments, employees, selectedDate, setSelectedDate, onS
               }}
             >
               <span className="day-cell-num" style={{ ...styles.dayCellNum, ...(today ? styles.dayCellNumToday : {}) }}>{d.getDate()}</span>
-              <span className="day-cell-name">{DAY_NAMES_SHORT_MON_FIRST[(d.getDay() + 6) % 7]}</span>
               <span style={styles.dayCellDots}>
                 {staffPresent.slice(0, 3).map((s) => (
                   <span key={s.id} className="day-dot" style={{ ...styles.dayDot, background: s.color }} />
@@ -831,17 +901,106 @@ function MonthView({ appointments, employees, selectedDate, setSelectedDate, onS
   );
 }
 
+function CalendarSettingsModal({ employees, onUpdateEmployee, ghostTimeOpacity, onUpdateGhostTimeOpacity, onClose }) {
+  const requestClose = useModalDismissal(onClose);
+  const ghostPercent = Math.round((ghostTimeOpacity ?? 0.32) * 100);
+
+  return (
+    <div className="modal-overlay" style={styles.modalOverlay}>
+      <div className="modal-card" style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={styles.modalHeader}>
+          <span style={styles.modalTitle}>Podešavanja</span>
+          <button style={styles.iconBtn} onClick={requestClose} aria-label="Zatvori">
+            <X size={20} />
+          </button>
+        </div>
+        <div style={styles.modalBody}>
+          <p style={styles.manageHint}>Ime i boja svake radnice na kalendaru i vremenskoj osi.</p>
+          {employees.map((emp) => (
+            <EmployeeSettingsRow key={emp.id} employee={emp} onUpdate={onUpdateEmployee} />
+          ))}
+
+          <p style={{ ...styles.manageHint, marginTop: 20 }}>
+            Kontrast blede oznake vremena u praznim terminima na vremenskoj osi ({ghostPercent}%).
+          </p>
+          <div style={styles.ghostSliderRow}>
+            <span style={styles.ghostPreview}>10:00</span>
+            <input
+              type="range"
+              min="10"
+              max="70"
+              value={ghostPercent}
+              onChange={(e) => onUpdateGhostTimeOpacity(Number(e.target.value) / 100)}
+              style={styles.ghostSlider}
+            />
+            <span style={{ ...styles.ghostPreview, color: `rgba(122,46,61,${ghostTimeOpacity ?? 0.32})`, fontWeight: 700 }}>10:00</span>
+          </div>
+        </div>
+        <div style={styles.modalFooter}>
+          <div style={{ flex: 1 }} />
+          <button style={styles.saveBtn} onClick={requestClose}>Gotovo</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EmployeeSettingsRow({ employee, onUpdate }) {
+  const [name, setName] = useState(employee.name);
+
+  const commitName = () => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setName(employee.name);
+      return;
+    }
+    if (trimmed !== employee.name) {
+      onUpdate(employee.id, { name: trimmed });
+    }
+  };
+
+  return (
+    <div style={styles.colorRow}>
+      <input
+        type="text"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        onBlur={commitName}
+        style={styles.colorRowNameInput}
+      />
+      <label style={styles.colorSwatchLabel}>
+        <input
+          type="color"
+          value={employee.color}
+          onChange={(e) => onUpdate(employee.id, { color: e.target.value })}
+          style={styles.colorSwatchInput}
+        />
+        <span style={{ ...styles.colorSwatch, background: employee.color }} />
+      </label>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /* Day timeline view                                                   */
 /* ------------------------------------------------------------------ */
 
+// Prati koji su prozori trenutno otvoreni, po redosledu otvaranja — služi da
+// ESC zatvori samo NAJGORNJI (poslednje otvoren) prozor, ne sve odjednom.
+const modalStack = [];
+
 // ESC ili "nazad" (telefon/browser) zatvara otvoren modal/prozor — umesto da
 // izađe iz aplikacije, samo zatvara dijalog i vraća na prethodni prikaz.
 // Radi tako što pri otvaranju modala ubacimo jedan "korak" u istoriju
-// browsera; kad se on skine (bilo pravim "nazad", bilo našim zatvaranjem),
-// modal se zatvara. Time se istorija ne "kvari" bez obzira kako se zatvorilo.
+// browsera, sa jedinstvenim ID-jem; kad se on skine (bilo pravim "nazad",
+// bilo našim zatvaranjem), modal se zatvara. ID je bitan kad su prozori
+// ugnježdeni (npr. zakazivanje otvoreno preko fullscreen prikaza) — svaki
+// prozor tako zna da li se baš NJEGOVO stanje skinulo, ili nečije iznad
+// njega, i ne zatvara se pogrešno kad se zatvori samo unutrašnji prozor.
 function useModalDismissal(onClose) {
   const closingRef = useRef(false);
+  const pushedRef = useRef(false);
+  const idRef = useRef(`m${Date.now()}${Math.random().toString(36).slice(2)}`);
 
   const requestClose = () => {
     if (closingRef.current) return;
@@ -850,19 +1009,37 @@ function useModalDismissal(onClose) {
   };
 
   useEffect(() => {
-    window.history.pushState({ modalOpen: true }, "");
-    const handlePop = () => {
+    // React Strict Mode (samo u razvojnom režimu) namerno pokreće ovaj efekat
+    // dvaput da bi uhvatio baš ovakve greške — ove provere osiguravaju da se
+    // stanje ubaci/upiše tačno jednom, bez obzira koliko se puta pokrene.
+    if (!pushedRef.current) {
+      window.history.pushState({ modalId: idRef.current }, "");
+      pushedRef.current = true;
+    }
+    if (!modalStack.includes(idRef.current)) {
+      modalStack.push(idRef.current);
+    }
+    const handlePop = (e) => {
+      // Ako je posle "nazad" akcije trenutno stanje i dalje baš ovo (moje),
+      // znači da se zatvorio neki ugnježdeni prozor iznad mene — ja ostajem.
+      if (e.state?.modalId === idRef.current) return;
       closingRef.current = true;
       onClose();
     };
     const handleKey = (e) => {
-      if (e.key === "Escape") requestClose();
+      if (e.key !== "Escape") return;
+      // Samo najgornji (poslednje otvoren) prozor reaguje na ESC — inače bi
+      // se svi ugnježdeni prozori zatvorili odjednom na isti pritisak tastera.
+      if (modalStack[modalStack.length - 1] !== idRef.current) return;
+      requestClose();
     };
     window.addEventListener("popstate", handlePop);
     window.addEventListener("keydown", handleKey);
     return () => {
       window.removeEventListener("popstate", handlePop);
       window.removeEventListener("keydown", handleKey);
+      const idx = modalStack.indexOf(idRef.current);
+      if (idx !== -1) modalStack.splice(idx, 1);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -884,7 +1061,7 @@ function useIsDesktop() {
 }
 
 function DayTimelineView({
-  appointments, employees, selectedDate, setSelectedDate, onBack, onSlotClick, onEditAppt, onMoveAppt,
+  appointments, employees, selectedDate, setSelectedDate, onBack, onSlotClick, onEditAppt, onMoveAppt, ghostTimeOpacity,
 }) {
   const [staffFilter, setStaffFilter] = useState("all");
   const isDesktop = useIsDesktop();
@@ -900,6 +1077,15 @@ function DayTimelineView({
   const wide = columns.length === 1;
 
   const [pendingMove, setPendingMove] = useState(null); // { apptId, sourceAppt, targetStaffId, targetTime }
+  const [fullscreenOpen, setFullscreenOpen] = useState(false);
+
+  // Na desktopu, po difoltu se dnevni prikaz otvara u fullscreen modu kad se
+  // stigne ovde klikom na datum u kalendaru (ovaj efekat se pokreće samo pri
+  // svežem otvaranju ovog prikaza, ne pri svakoj izmeni unutar njega).
+  useEffect(() => {
+    if (isDesktop) setFullscreenOpen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleDropOnSlot = (targetStaffId, targetTime, apptId) => {
     if (!apptId) return;
@@ -920,6 +1106,78 @@ function DayTimelineView({
     setPendingMove(null);
   };
 
+  const renderTimelineGrid = (rowHeight, stickyHeader) => (
+    <div style={styles.timelineOuter}>
+      <div style={{ ...styles.timeLabelCol, height: STAFF_HEADER_HEIGHT + TOTAL_SLOTS * rowHeight }}>
+        <button
+          style={{
+            ...styles.svCornerBtn, ...(staffFilter === "all" ? styles.svCornerBtnActive : {}),
+            ...(stickyHeader ? {} : { position: "relative" }),
+          }}
+          onClick={() => setStaffFilter("all")}
+          aria-label="Prikaži sve"
+        >
+          Svi
+        </button>
+        {Array.from({ length: TOTAL_SLOTS + 1 }).map((_, i) => (
+          <div
+            key={i}
+            style={{
+              ...styles.timeLabelLine,
+              top: STAFF_HEADER_HEIGHT + i * rowHeight,
+              borderTop: i % 2 === 0 ? "1px solid #D9C4A8" : "1px dashed #E3D4BD",
+            }}
+          >
+            <span style={styles.timeLabel}>{slotLabel(i)}</span>
+          </div>
+        ))}
+      </div>
+      {columns.map((staff) => (
+        <StaffTimelineColumn
+          key={staff.id}
+          staff={staff}
+          appts={dayAppts.filter((a) => a.staff === staff.id)}
+          wide={wide}
+          isDesktop={isDesktop}
+          ghostTimeOpacity={ghostTimeOpacity}
+          clickableHeader={staffFilter === "all"}
+          onHeaderClick={() => setStaffFilter(staff.id)}
+          onSlotClick={(time) => onSlotClick(staff.id, time)}
+          onEditAppt={onEditAppt}
+          onSlotDrop={(time, apptId) => handleDropOnSlot(staff.id, time, apptId)}
+          rowHeight={rowHeight}
+          stickyHeader={stickyHeader}
+        />
+      ))}
+    </div>
+  );
+  const timelineGrid = renderTimelineGrid(ROW_HEIGHT, true);
+
+  // Na desktopu, proširi vremensku osu do dna ekrana (isti princip kao za
+  // mesečni kalendar) — u idealnom slučaju ceo raspon 10:00-20:00 stane bez
+  // skrolovanja; na manjim ekranima ostaje interno skrolovanje unutar okvira.
+  const scrollWrapRef = useRef(null);
+  const [timelineHeight, setTimelineHeight] = useState(null);
+  useEffect(() => {
+    if (!isDesktop) {
+      setTimelineHeight(null);
+      return;
+    }
+    const recalc = () => {
+      if (!scrollWrapRef.current) return;
+      const top = scrollWrapRef.current.getBoundingClientRect().top;
+      const available = window.innerHeight - top - 20;
+      setTimelineHeight(Math.max(available, 300));
+    };
+    recalc();
+    const retry = setTimeout(recalc, 400);
+    window.addEventListener("resize", recalc);
+    return () => {
+      clearTimeout(retry);
+      window.removeEventListener("resize", recalc);
+    };
+  }, [isDesktop, staffFilter]);
+
   const touchStart = useRef(null);
   const handleTouchStart = (e) => {
     const t = e.touches[0];
@@ -938,17 +1196,17 @@ function DayTimelineView({
 
   return (
     <div style={styles.dayViewWrap} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
-      <button style={styles.backLink} onClick={onBack}>
-        <ChevronLeft size={15} />
-        <span>{MONTH_NAMES[selectedDate.getMonth()]} {selectedDate.getFullYear()}.</span>
-      </button>
-
       <div style={styles.dateNav}>
         <button style={styles.navBtn} onClick={() => setSelectedDate((d) => addDays(d, -1))} aria-label="Prethodni dan">
           <ChevronLeft size={20} />
         </button>
         <div style={styles.dateNavCenter}>
-          <div style={styles.dateNavDate}>{displayDateLong(selectedDate)}</div>
+          <div style={styles.dateNavDateRow}>
+            <div style={styles.dateNavDate}>{displayDateLong(selectedDate)}</div>
+            <button style={styles.expandBtn} onClick={() => setFullscreenOpen(true)} aria-label="Prikaz preko celog ekrana">
+              <Maximize2 size={14} />
+            </button>
+          </div>
           {!isToday(selectedDate) && (
             <button style={styles.todayLink} onClick={() => setSelectedDate(new Date())}>
               Vrati se na danas
@@ -958,13 +1216,6 @@ function DayTimelineView({
         <button style={styles.navBtn} onClick={() => setSelectedDate((d) => addDays(d, 1))} aria-label="Sledeći dan">
           <ChevronRight size={20} />
         </button>
-      </div>
-
-      <div style={styles.ribbonRow}>
-        <RibbonTab label="Svi" active={staffFilter === "all"} color="#8A7368" onClick={() => setStaffFilter("all")} />
-        {employees.map((s) => (
-          <RibbonTab key={s.id} label={s.name} active={staffFilter === s.id} color={s.color} onClick={() => setStaffFilter(s.id)} />
-        ))}
       </div>
 
       <div style={styles.dayTotalRow}>
@@ -979,38 +1230,14 @@ function DayTimelineView({
         <span style={styles.dayTotalValue}>{formatMoney(dayTotal)}</span>
       </div>
 
-      <div style={styles.timelineScrollWrap}>
-        <div style={styles.timelineOuter}>
-          <div style={styles.timeLabelCol}>
-            <div style={styles.timeLabelColHeader} />
-            {Array.from({ length: TOTAL_SLOTS + 1 }).map((_, i) => (
-              <div
-                key={i}
-                style={{
-                  ...styles.timeLabelLine,
-                  top: STAFF_HEADER_HEIGHT + i * ROW_HEIGHT,
-                  borderTop: i % 2 === 0 ? "1px solid #D9C4A8" : "1px dashed #E3D4BD",
-                }}
-              >
-                <span style={styles.timeLabel}>{slotLabel(i)}</span>
-              </div>
-            ))}
-          </div>
-          {columns.map((staff) => (
-            <StaffTimelineColumn
-              key={staff.id}
-              staff={staff}
-              appts={dayAppts.filter((a) => a.staff === staff.id)}
-              wide={wide}
-              isDesktop={isDesktop}
-              clickableHeader={staffFilter === "all"}
-              onHeaderClick={() => setStaffFilter(staff.id)}
-              onSlotClick={(time) => onSlotClick(staff.id, time)}
-              onEditAppt={onEditAppt}
-              onSlotDrop={(time, apptId) => handleDropOnSlot(staff.id, time, apptId)}
-            />
-          ))}
-        </div>
+      <div
+        ref={scrollWrapRef}
+        style={{
+          ...styles.timelineScrollWrap,
+          ...(isDesktop && timelineHeight ? { height: timelineHeight, maxHeight: "none" } : {}),
+        }}
+      >
+        {timelineGrid}
       </div>
 
       {pendingMove && (
@@ -1029,6 +1256,63 @@ function DayTimelineView({
           </div>
         </div>
       )}
+
+      {fullscreenOpen && (
+        <FullscreenTimeline
+          dateLabel={displayDateLong(selectedDate)}
+          apptCount={filteredDayAppts.length}
+          unpaidCount={unpaidCount}
+          dayTotal={dayTotal}
+          renderTimelineGrid={renderTimelineGrid}
+          onClose={() => setFullscreenOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Prikaz vremenske ose preko celog ekrana, uvek smanjen/uvećan (transform: scale)
+// tako da ceo raspon 10:00-20:00 stane bez skrolovanja, bez obzira na veličinu
+// ekrana. ESC ili "nazad" zatvara (isti mehanizam kao ostali prozori).
+function FullscreenTimeline({ dateLabel, apptCount, unpaidCount, dayTotal, renderTimelineGrid, onClose }) {
+  const requestClose = useModalDismissal(onClose);
+  const stageRef = useRef(null);
+  const [rowHeight, setRowHeight] = useState(ROW_HEIGHT);
+
+  useEffect(() => {
+    const recalc = () => {
+      if (!stageRef.current) return;
+      const availH = stageRef.current.clientHeight - STAFF_HEADER_HEIGHT - 30;
+      const computed = Math.floor(availH / TOTAL_SLOTS);
+      setRowHeight(Math.max(Math.min(computed, 56), 16));
+    };
+    recalc();
+    window.addEventListener("resize", recalc);
+    return () => window.removeEventListener("resize", recalc);
+  }, []);
+
+  return (
+    <div style={styles.fullscreenOverlay}>
+      <div style={styles.fullscreenTopBar}>
+        <div style={styles.fullscreenTopBarLeft}>
+          <span style={styles.fullscreenDate}>{dateLabel}</span>
+          <span style={styles.fullscreenStats}>
+            {apptCount} {apptCount === 1 ? "termin" : "termina"}
+            {unpaidCount > 0 && (
+              <span style={styles.dayTotalUnpaid}>
+                {" "}(<AlertTriangle size={11} style={{ verticalAlign: "-1px" }} /> {unpaidCount} nenaplaćeno)
+              </span>
+            )}
+            <span style={styles.fullscreenStatsMoney}> · {formatMoney(dayTotal)}</span>
+          </span>
+        </div>
+        <button style={styles.fullscreenCloseBtn} onClick={requestClose} aria-label="Zatvori">
+          <X size={20} />
+        </button>
+      </div>
+      <div ref={stageRef} style={styles.fullscreenStage}>
+        {renderTimelineGrid(rowHeight, false)}
+      </div>
     </div>
   );
 }
@@ -1090,7 +1374,7 @@ function RibbonTab({ label, active, color, onClick }) {
   );
 }
 
-function StaffTimelineColumn({ staff, appts, wide, isDesktop, clickableHeader, onHeaderClick, onSlotClick, onEditAppt, onSlotDrop }) {
+function StaffTimelineColumn({ staff, appts, wide, isDesktop, ghostTimeOpacity, clickableHeader, onHeaderClick, onSlotClick, onEditAppt, onSlotDrop, rowHeight = ROW_HEIGHT, stickyHeader = true }) {
   const groupInfo = useMemo(() => {
     const byGroup = {};
     appts.forEach((a) => {
@@ -1107,30 +1391,35 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, clickableHeader, o
     Object.values(groupInfo).forEach((group) => {
       if (group.length < 2) return;
       for (let i = 0; i < group.length - 1; i++) {
-        const posA = apptPosition(group[i]);
-        const posB = apptPosition(group[i + 1]);
+        const posA = apptPosition(group[i], rowHeight);
+        const posB = apptPosition(group[i + 1], rowHeight);
         const top = posA.top + posA.height;
         const height = posB.top - top;
         if (height > 6) gaps.push({ key: `${group[i].id}-${group[i + 1].id}`, top, height });
       }
     });
     return gaps;
-  }, [groupInfo]);
+  }, [groupInfo, rowHeight]);
 
   return (
     <div style={styles.staffCol}>
       {clickableHeader ? (
         <button
-          style={{ ...styles.staffColHeader, ...styles.staffColHeaderBtn, background: staff.color }}
+          style={{
+            ...styles.staffColHeader, ...styles.staffColHeaderBtn, background: staff.color,
+            ...(stickyHeader ? {} : { position: "relative" }),
+          }}
           onClick={onHeaderClick}
           aria-label={`Prikaži samo ${staff.name}`}
         >
           {staff.name}
         </button>
       ) : (
-        <div style={{ ...styles.staffColHeader, background: staff.color }}>{staff.name}</div>
+        <div style={{ ...styles.staffColHeader, background: staff.color, ...(stickyHeader ? {} : { position: "relative" }) }}>
+          {staff.name}
+        </div>
       )}
-      <div style={styles.staffColBody}>
+      <div style={{ ...styles.staffColBody, height: TOTAL_SLOTS * rowHeight }}>
         {Array.from({ length: TOTAL_SLOTS }).map((_, i) => (
           <button
             key={i}
@@ -1142,13 +1431,13 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, clickableHeader, o
             }}
             style={{
               ...styles.slotBtn,
-              top: i * ROW_HEIGHT,
-              height: ROW_HEIGHT,
+              top: i * rowHeight,
+              height: rowHeight,
               borderTop: i % 2 === 0 ? "1px solid #D9C4A8" : "1px dashed #E3D4BD",
             }}
             aria-label={`Zakaži u ${slotLabel(i)}`}
           >
-            <span style={styles.slotGhostTime}>{slotLabel(i)}</span>
+            <span style={{ ...styles.slotGhostTime, color: `rgba(122,46,61,${ghostTimeOpacity ?? 0.32})` }}>{slotLabel(i)}</span>
           </button>
         ))}
         {connectors.map((c) => (
@@ -1157,7 +1446,7 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, clickableHeader, o
           </div>
         ))}
         {appts.map((a) => {
-          const pos = apptPosition(a);
+          const pos = apptPosition(a, rowHeight);
           const blockHeight = Math.max(pos.height - 3, 16);
           const hasOwnPrice = a.price !== "" && a.price !== null && a.price !== undefined && !isNaN(a.price);
 
@@ -1192,7 +1481,6 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, clickableHeader, o
           return (
             <button
               key={a.id}
-              className={showUnpaidFlag ? "unpaid-pulse" : undefined}
               onClick={() => onEditAppt(a.id)}
               draggable
               onDragStart={(e) => {
@@ -1205,7 +1493,6 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, clickableHeader, o
                 height: blockHeight,
                 background: a.blocked ? undefined : staff.color,
                 ...(a.blocked ? styles.apptBlockBlocked : {}),
-                ...(showUnpaidFlag ? styles.apptBlockUnpaid : {}),
               }}
             >
               {showUnpaidFlag && (
@@ -1960,7 +2247,7 @@ function LoginModal({ purpose, onClose, onLogin, error, loading }) {
 /* Stats view                                                          */
 /* ------------------------------------------------------------------ */
 
-function StatsView({ appointments, employees, clients, onImportData, onOpenPayroll, onRequestSecureReset }) {
+function StatsView({ appointments, employees, clients, onImportData, onOpenPayroll, onRequestSecureReset, onOpenSettings }) {
   const fileInputRef = useRef(null);
   const [period, setPeriod] = useState("day");
   const [customFrom, setCustomFrom] = useState(dateKey(startOfMonth(new Date())));
@@ -2194,6 +2481,11 @@ function StatsView({ appointments, employees, clients, onImportData, onOpenPayro
           </button>
         </div>
       </div>
+
+      <button style={styles.settingsLinkBtn} onClick={onOpenSettings}>
+        <Settings size={15} />
+        <span>Podešavanja</span>
+      </button>
     </div>
   );
 }
@@ -2231,26 +2523,18 @@ function GlobalStyle() {
 
       .app-root { max-width: 560px; margin: 0 auto; min-height: 100vh; }
       .day-cell { aspect-ratio: 1; }
-      .day-cell-name { display: none; }
       .weekday-cell { font-size: 11px; }
       .day-cell-num { font-size: 13px; }
       .day-dot { width: 5px; height: 5px; }
       .modal-overlay { align-items: flex-end; }
       .modal-card { border-radius: 16px 16px 0 0; }
 
-      @keyframes unpaid-pulse-anim {
-        0%, 100% { box-shadow: 0 2px 4px rgba(43,27,31,0.22), 0 0 0 0 rgba(161,58,58,0.5); }
-        50% { box-shadow: 0 2px 4px rgba(43,27,31,0.22), 0 0 5px 1px rgba(161,58,58,0.85); }
-      }
-      .unpaid-pulse { animation: unpaid-pulse-anim 2.2s ease-in-out infinite; }
-
       @media (min-width: 900px) {
         .app-root { max-width: 1100px; }
-        .day-cell { aspect-ratio: 4 / 3; }
-        .day-cell-name { display: block; font-size: clamp(11px, 1vw, 15px); color: #B4A296; margin-top: 2px; }
+        .day-cell { aspect-ratio: auto; }
         .weekday-cell { font-size: clamp(12px, 1.1vw, 16px); }
-        .day-cell-num { font-size: clamp(16px, 2.2vw, 28px); }
-        .day-dot { width: clamp(5px, 0.7vw, 9px); height: clamp(5px, 0.7vw, 9px); }
+        .day-cell-num { font-size: clamp(13px, 1.5vw, 20px); }
+        .day-dot { width: clamp(4px, 0.5vw, 7px); height: clamp(4px, 0.5vw, 7px); }
         .modal-overlay { align-items: center; }
         .modal-card { border-radius: 16px; max-height: 85vh; }
       }
@@ -2269,20 +2553,17 @@ const FONT_MONO = "'JetBrains Mono', monospace";
 const styles = {
   appRoot: {
     fontFamily: FONT_BODY, background: "#FBF6EE", color: "#2B1B1F",
-    position: "relative", paddingBottom: 90,
+    position: "relative",
   },
   loadingWrap: { padding: 48, textAlign: "center" },
   loadingText: { color: "#8A7368", fontSize: 14 },
 
   header: {
-    padding: "18px 18px 0", borderBottom: "1px solid #EFE3D0", position: "sticky", top: 0,
+    padding: "10px 18px 0", borderBottom: "1px solid #EFE3D0", position: "sticky", top: 0,
     background: "#FBF6EE", zIndex: 5,
   },
-  headerTop: { display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 6 },
-  brandRow: { display: "flex", alignItems: "center", gap: 8 },
-  brandText: { fontFamily: FONT_DISPLAY, fontSize: 19, fontWeight: 600, letterSpacing: 0.2 },
-  saveError: { fontSize: 11, color: "#A13A3A" },
-  tabRow: { display: "flex", gap: 4, marginTop: 14 },
+  saveErrorBanner: { fontSize: 11.5, color: "#A13A3A", textAlign: "center", padding: "4px 0" },
+  tabRow: { display: "flex", gap: 4, marginTop: 4 },
   tabBtn: {
     flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
     padding: "10px 8px", border: "none", background: "transparent", color: "#8A7368",
@@ -2290,7 +2571,7 @@ const styles = {
   },
   tabBtnActive: { color: "#7A2E3D", borderBottom: "2px solid #7A2E3D", fontWeight: 600 },
 
-  monthWrap: { padding: "16px 18px 8px" },
+  monthWrap: { padding: "12px 18px 8px" },
   dateNav: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 },
   navBtn: {
     width: 36, height: 36, borderRadius: "50%", border: "1px solid #E8DCC8", background: "#FFFDF9",
@@ -2299,6 +2580,11 @@ const styles = {
   dateNavCenter: { textAlign: "center", flex: 1 },
   monthTitle: { fontFamily: FONT_DISPLAY, fontSize: 18, fontWeight: 600 },
   dateNavDate: { fontFamily: FONT_DISPLAY, fontSize: 16.5, fontWeight: 600 },
+  dateNavDateRow: { display: "flex", alignItems: "center", justifyContent: "center", gap: 8 },
+  expandBtn: {
+    width: 24, height: 24, borderRadius: "50%", border: "1px solid #E8DCC8", background: "#FFFDF9",
+    color: "#7A2E3D", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+  },
   todayLink: { border: "none", background: "none", color: "#7A2E3D", fontSize: 11.5, textDecoration: "underline", padding: 2, marginTop: 2 },
 
   swipeHint: { textAlign: "center", fontSize: 11, color: "#C9BBAE", marginBottom: 10 },
@@ -2309,7 +2595,7 @@ const styles = {
   dayCell: {
     border: "1px solid #EFE3D0", background: "#FFFDF9", borderRadius: 9,
     display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-    padding: "4px 2px", gap: 3, position: "relative",
+    padding: "3px 2px", gap: 2, position: "relative", minHeight: 0, minWidth: 0, overflow: "hidden",
   },
   dayCellToday: { borderColor: "#7A2E3D", borderWidth: 2 },
   dayCellNum: { fontWeight: 500, color: "#2B1B1F" },
@@ -2322,12 +2608,15 @@ const styles = {
     color: "#8A7368", fontSize: 12.5, padding: "0 0 10px", fontWeight: 500,
   },
 
-  ribbonRow: { display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" },
+  ribbonRow: { display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" },
   ribbonTab: {
     padding: "6px 14px", borderRadius: "3px 3px 8px 8px", border: "1.5px solid",
     fontSize: 12.5, fontWeight: 600, boxShadow: "0 2px 3px rgba(43,27,31,0.08)",
   },
-
+  gearBtn: {
+    width: 30, height: 30, borderRadius: "50%", border: "1px solid #E8DCC8",
+    background: "#FFFDF9", color: "#7A2E3D", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+  },
   dayViewWrap: { padding: "14px 18px 0" },
   dayTotalRow: {
     display: "flex", justifyContent: "space-between", alignItems: "baseline",
@@ -2344,9 +2633,34 @@ const styles = {
   confirmMoveBtnRow: { display: "flex", justifyContent: "flex-end", gap: 10 },
 
   timelineScrollWrap: { maxHeight: "min(640px, calc(100vh - 320px))", overflowY: "auto", marginTop: 10, borderRadius: 8 },
-  timelineOuter: { display: "flex", position: "relative", gap: 6 },
+
+  fullscreenOverlay: {
+    position: "fixed", inset: 0, background: "#FBF6EE", zIndex: 15,
+    display: "flex", flexDirection: "column",
+  },
+  fullscreenTopBar: {
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    padding: "14px 20px", borderBottom: "1px solid #EFE3D0", flexShrink: 0,
+  },
+  fullscreenDate: { fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 600 },
+  fullscreenTopBarLeft: { display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" },
+  fullscreenStats: { fontSize: 12.5, color: "#8A7368" },
+  fullscreenStatsMoney: { fontFamily: FONT_MONO, color: "#7A2E3D", fontWeight: 600 },
+  fullscreenCloseBtn: {
+    width: 34, height: 34, borderRadius: "50%", border: "1px solid #E8DCC8", background: "#FFFDF9",
+    color: "#5A473F", display: "flex", alignItems: "center", justifyContent: "center",
+  },
+  fullscreenStage: {
+    flex: 1, display: "flex", alignItems: "stretch", overflow: "auto", padding: "12px 20px",
+  },
+  timelineOuter: { display: "flex", position: "relative", gap: 6, width: "100%", minWidth: 0 },
   timeLabelCol: { width: 42, flexShrink: 0, position: "relative", height: STAFF_HEADER_HEIGHT + TIMELINE_HEIGHT },
-  timeLabelColHeader: { height: STAFF_HEADER_HEIGHT, position: "sticky", top: 0, background: "#FBF6EE", zIndex: 6 },
+  svCornerBtn: {
+    height: STAFF_HEADER_HEIGHT - 8, marginBottom: 8, position: "sticky", top: 0, zIndex: 6,
+    width: "100%", borderRadius: 6, border: "1.5px solid #8A7368", background: "#FFFDF9", color: "#5A473F",
+    fontSize: 10.5, fontWeight: 700,
+  },
+  svCornerBtnActive: { background: "#8A7368", color: "#FBF6EE" },
   timeLabelLine: { position: "absolute", left: 0, right: 0 },
   timeLabel: { display: "block", fontSize: 10.5, color: "#8A7368", fontFamily: FONT_MONO, lineHeight: 1, padding: "2px 4px 0 0", textAlign: "right" },
 
@@ -2373,7 +2687,6 @@ const styles = {
   apptBlockBlocked: {
     background: "repeating-linear-gradient(45deg, #A8927F, #A8927F 6px, #96806D 6px, #96806D 12px)",
   },
-  apptBlockUnpaid: { border: "2px solid #A13A3A" },
   apptBlockService: { fontSize: 11, fontWeight: 700, color: "#FBF6EE", lineHeight: 1.15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" },
   apptBlockServiceWrap: { whiteSpace: "normal", wordBreak: "break-word", overflow: "visible", textOverflow: "clip" },
   apptBlockGroupTag: { fontSize: 10, fontWeight: 700, color: "rgba(251,246,238,0.95)", lineHeight: 1.15, letterSpacing: 0.2 },
@@ -2505,6 +2818,11 @@ const styles = {
     border: "1px solid #E3B8B8", background: "#FDF3F3", color: "#A13A3A",
     borderRadius: 8, padding: "9px 14px", fontSize: 12, fontWeight: 500,
   },
+  settingsLinkBtn: {
+    display: "flex", alignItems: "center", justifyContent: "center", gap: 7, width: "100%",
+    marginTop: 20, marginBottom: 10, border: "1px solid #E8DCC8", background: "#FFFDF9", color: "#5A473F",
+    borderRadius: 10, padding: "11px 14px", fontSize: 13, fontWeight: 600,
+  },
 
   emptyState: { textAlign: "center", padding: "48px 16px", display: "flex", flexDirection: "column", alignItems: "center", gap: 6 },
   emptyStateText: { color: "#8A7368", fontSize: 14, marginTop: 4 },
@@ -2541,6 +2859,18 @@ const styles = {
     borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center",
   },
   manageHint: { fontSize: 12.5, color: "#8A7368", lineHeight: 1.5, margin: "0 0 14px" },
+  colorRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 0", borderBottom: "1px solid #F2E9DB" },
+  colorRowName: { fontSize: 14, fontWeight: 600 },
+  colorRowNameInput: {
+    flex: 1, fontSize: 14, fontWeight: 600, color: "#2B1B1F", padding: "8px 10px",
+    borderRadius: 8, border: "1px solid #E8DCC8", background: "#FFFDF9",
+  },
+  colorSwatchLabel: { position: "relative", width: 34, height: 34, cursor: "pointer", display: "block" },
+  colorSwatchInput: { position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer", border: "none", padding: 0 },
+  colorSwatch: { display: "block", width: "100%", height: "100%", borderRadius: "50%", border: "2px solid #FFFDF9", boxShadow: "0 0 0 1.5px #E8DCC8", pointerEvents: "none" },
+  ghostSliderRow: { display: "flex", alignItems: "center", gap: 10 },
+  ghostSlider: { flex: 1, accentColor: "#7A2E3D" },
+  ghostPreview: { fontFamily: FONT_MONO, fontSize: 12, color: "#B4A296", minWidth: 40, textAlign: "center" },
   serviceRowEdit: { display: "flex", gap: 6, alignItems: "center", marginBottom: 8 },
   serviceDurationInput: { width: 62, padding: "10px 6px", borderRadius: 8, border: "1px solid #E8DCC8", background: "#FFFDF9", fontSize: 13.5, textAlign: "center" },
   serviceDurationUnit: { fontSize: 11.5, color: "#8A7368" },
