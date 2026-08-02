@@ -170,26 +170,47 @@ function staffById(id, employees) {
   return employees.find((s) => s.id === id) || employees[0] || { id, name: "?", color: "#B4A296" };
 }
 
-function slotLabel(i) {
+function slotLabel(i, startHour = WORK_START_HOUR) {
   const totalMin = i * 30;
-  const h = WORK_START_HOUR + Math.floor(totalMin / 60);
+  const h = startHour + Math.floor(totalMin / 60);
   const m = totalMin % 60;
   return `${pad2(h)}:${pad2(m)}`;
 }
 
-// 10:00, 10:30, 11:00 ... 20:00 — za padajući meni u formi zakazivanja
-const TIME_OPTIONS = Array.from({ length: TOTAL_SLOTS + 1 }, (_, i) => slotLabel(i));
+// Padajući meni u formi zakazivanja dozvoljava izbor i pre uobičajenog
+// radnog vremena (npr. 08:00) — vremenska osa i dalje normalno počinje od
+// WORK_START_HOUR (10:00), i širi se unazad SAMO za dan koji stvarno ima
+// ovako rano zakazan termin (vidi computeDayStartHour niže).
+const FORM_START_HOUR = 8;
+const FORM_TOTAL_SLOTS = (WORK_END_HOUR - FORM_START_HOUR) * 2;
+// 8:00, 8:30, 9:00 ... 20:00 — za padajući meni u formi zakazivanja
+const TIME_OPTIONS = Array.from({ length: FORM_TOTAL_SLOTS + 1 }, (_, i) => slotLabel(i, FORM_START_HOUR));
 
-function apptPosition(appt, rowHeight = ROW_HEIGHT) {
-  const [h, m] = (appt.time || `${WORK_START_HOUR}:00`).split(":").map(Number);
-  let start = (h - WORK_START_HOUR) * 60 + (m || 0);
-  start = Math.max(0, Math.min(TOTAL_SLOTS * 30, start));
+function apptPosition(appt, rowHeight = ROW_HEIGHT, startHour = WORK_START_HOUR, totalSlots = TOTAL_SLOTS) {
+  const [h, m] = (appt.time || `${startHour}:00`).split(":").map(Number);
+  let start = (h - startHour) * 60 + (m || 0);
+  start = Math.max(0, Math.min(totalSlots * 30, start));
   const dur = Number(appt.duration) || 30;
-  let end = Math.max(start + 15, Math.min(TOTAL_SLOTS * 30, start + dur));
+  let end = Math.max(start + 15, Math.min(totalSlots * 30, start + dur));
   return {
     top: (start / 30) * rowHeight,
     height: Math.max(((end - start) / 30) * rowHeight, Math.min(18, rowHeight)),
   };
+}
+
+// Izračunava od kog sata treba da počne prikaz vremenske ose za dati dan —
+// normalno WORK_START_HOUR, ali ako postoji termin zakazan i ranije od toga
+// (ručno unet van uobičajenog radnog vremena), osa se za TAJ dan proširi
+// unazad do punog sata tog najranijeg termina, da se ne bi sekao.
+function computeDayStartHour(dayAppts) {
+  let earliest = WORK_START_HOUR;
+  dayAppts.forEach((a) => {
+    if (!a.time) return;
+    const [h, m] = a.time.split(":").map(Number);
+    if (isNaN(h)) return;
+    if (h < earliest) earliest = h;
+  });
+  return Math.max(earliest, 0);
 }
 
 function genId() {
@@ -631,7 +652,7 @@ export default function SalonApp() {
           }}
         />
       ) : (
-      <div className="app-root" style={{ ...styles.appRoot, paddingBottom: view === "day" && !isDesktop ? 90 : 20 }}>
+      <div className="app-root" style={{ ...styles.appRoot, paddingBottom: 20 }}>
       <Header view={view} setView={setView} saveError={saveError} />
 
       {!loaded ? (
@@ -710,12 +731,6 @@ export default function SalonApp() {
           onUpdateGhostTimeOpacity={updateGhostTimeOpacity}
           onClose={() => setSettingsOpen(false)}
         />
-      )}
-
-      {view === "day" && !isDesktop && (
-        <button style={styles.fab} onClick={() => openNewForm({ date: dateKey(selectedDate) })} aria-label="Dodaj zakazivanje">
-          <Plus size={26} strokeWidth={2.5} color="#FBF6EE" />
-        </button>
       )}
 
       {formOpen && (
@@ -1171,6 +1186,8 @@ function DayTimelineView({
   const key = dateKey(selectedDate);
 
   const dayAppts = useMemo(() => appointments.filter((a) => a.date === key), [appointments, key]);
+  const dayStartHour = useMemo(() => computeDayStartHour(dayAppts), [dayAppts]);
+  const daySlots = (WORK_END_HOUR - dayStartHour) * 2;
 
   const filteredDayAppts = staffFilter === "all" ? dayAppts : dayAppts.filter((a) => a.staff === staffFilter);
   const dayTotal = filteredDayAppts.reduce((sum, a) => sum + (a.blocked ? 0 : Number(a.price) || 0), 0);
@@ -1203,7 +1220,7 @@ function DayTimelineView({
 
   const renderTimelineGrid = (rowHeight, stickyHeader) => (
     <div style={styles.timelineOuter}>
-      <div style={{ ...styles.timeLabelCol, height: STAFF_HEADER_HEIGHT + TOTAL_SLOTS * rowHeight }}>
+      <div style={{ ...styles.timeLabelCol, height: STAFF_HEADER_HEIGHT + daySlots * rowHeight }}>
         <button
           style={{
             ...styles.svCornerBtn, ...(staffFilter === "all" ? styles.svCornerBtnActive : {}),
@@ -1214,7 +1231,7 @@ function DayTimelineView({
         >
           Svi
         </button>
-        {Array.from({ length: TOTAL_SLOTS + 1 }).map((_, i) => (
+        {Array.from({ length: daySlots + 1 }).map((_, i) => (
           <div
             key={i}
             style={{
@@ -1223,7 +1240,7 @@ function DayTimelineView({
               borderTop: i % 2 === 0 ? "1px solid #D9C4A8" : "1px dashed #E3D4BD",
             }}
           >
-            <span style={styles.timeLabel}>{slotLabel(i)}</span>
+            <span style={styles.timeLabel}>{slotLabel(i, dayStartHour)}</span>
           </div>
         ))}
       </div>
@@ -1242,22 +1259,20 @@ function DayTimelineView({
           onSlotDrop={(time, apptId) => handleDropOnSlot(staff.id, time, apptId)}
           rowHeight={rowHeight}
           stickyHeader={stickyHeader}
+          startHour={dayStartHour}
+          totalSlots={daySlots}
         />
       ))}
     </div>
   );
   const timelineGrid = renderTimelineGrid(ROW_HEIGHT, true);
 
-  // Na desktopu, proširi vremensku osu do dna ekrana (isti princip kao za
-  // mesečni kalendar) — u idealnom slučaju ceo raspon 10:00-20:00 stane bez
-  // skrolovanja; na manjim ekranima ostaje interno skrolovanje unutar okvira.
+  // Proširi vremensku osu do dna ekrana (na telefonu i računaru) — u
+  // idealnom slučaju ceo raspon stane bez skrolovanja; na manjim ekranima
+  // ostaje interno skrolovanje unutar okvira kao sigurnosna mreža.
   const scrollWrapRef = useRef(null);
   const [timelineHeight, setTimelineHeight] = useState(null);
   useEffect(() => {
-    if (!isDesktop) {
-      setTimelineHeight(null);
-      return;
-    }
     const recalc = () => {
       if (!scrollWrapRef.current) return;
       const top = scrollWrapRef.current.getBoundingClientRect().top;
@@ -1271,7 +1286,7 @@ function DayTimelineView({
       clearTimeout(retry);
       window.removeEventListener("resize", recalc);
     };
-  }, [isDesktop, staffFilter]);
+  }, [staffFilter, daySlots]);
 
   const touchStart = useRef(null);
   const handleTouchStart = (e) => {
@@ -1329,7 +1344,7 @@ function DayTimelineView({
         ref={scrollWrapRef}
         style={{
           ...styles.timelineScrollWrap,
-          ...(isDesktop && timelineHeight ? { height: timelineHeight, maxHeight: "none" } : {}),
+          ...(timelineHeight ? { height: timelineHeight, maxHeight: "none" } : {}),
         }}
       >
         {timelineGrid}
@@ -1358,6 +1373,7 @@ function DayTimelineView({
           apptCount={filteredDayAppts.length}
           unpaidCount={unpaidCount}
           dayTotal={dayTotal}
+          daySlots={daySlots}
           renderTimelineGrid={renderTimelineGrid}
           onClose={() => setFullscreenOpen(false)}
         />
@@ -1369,7 +1385,7 @@ function DayTimelineView({
 // Prikaz vremenske ose preko celog ekrana, uvek smanjen/uvećan (transform: scale)
 // tako da ceo raspon 10:00-20:00 stane bez skrolovanja, bez obzira na veličinu
 // ekrana. ESC ili "nazad" zatvara (isti mehanizam kao ostali prozori).
-function FullscreenTimeline({ dateLabel, apptCount, unpaidCount, dayTotal, renderTimelineGrid, onClose }) {
+function FullscreenTimeline({ dateLabel, apptCount, unpaidCount, dayTotal, daySlots, renderTimelineGrid, onClose }) {
   const requestClose = useModalDismissal(onClose);
   const stageRef = useRef(null);
   const [rowHeight, setRowHeight] = useState(ROW_HEIGHT);
@@ -1378,13 +1394,14 @@ function FullscreenTimeline({ dateLabel, apptCount, unpaidCount, dayTotal, rende
     const recalc = () => {
       if (!stageRef.current) return;
       const availH = stageRef.current.clientHeight - STAFF_HEADER_HEIGHT - 30;
-      const computed = Math.floor(availH / TOTAL_SLOTS);
+      const computed = Math.floor(availH / daySlots);
       setRowHeight(Math.max(Math.min(computed, 56), 16));
     };
     recalc();
     window.addEventListener("resize", recalc);
     return () => window.removeEventListener("resize", recalc);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [daySlots]);
 
   return (
     <div style={styles.fullscreenOverlay}>
@@ -1469,7 +1486,7 @@ function RibbonTab({ label, active, color, onClick }) {
   );
 }
 
-function StaffTimelineColumn({ staff, appts, wide, isDesktop, ghostTimeOpacity, clickableHeader, onHeaderClick, onSlotClick, onEditAppt, onSlotDrop, rowHeight = ROW_HEIGHT, stickyHeader = true }) {
+function StaffTimelineColumn({ staff, appts, wide, isDesktop, ghostTimeOpacity, clickableHeader, onHeaderClick, onSlotClick, onEditAppt, onSlotDrop, rowHeight = ROW_HEIGHT, stickyHeader = true, startHour = WORK_START_HOUR, totalSlots = TOTAL_SLOTS }) {
   const groupInfo = useMemo(() => {
     const byGroup = {};
     appts.forEach((a) => {
@@ -1486,15 +1503,15 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, ghostTimeOpacity, 
     Object.values(groupInfo).forEach((group) => {
       if (group.length < 2) return;
       for (let i = 0; i < group.length - 1; i++) {
-        const posA = apptPosition(group[i], rowHeight);
-        const posB = apptPosition(group[i + 1], rowHeight);
+        const posA = apptPosition(group[i], rowHeight, startHour, totalSlots);
+        const posB = apptPosition(group[i + 1], rowHeight, startHour, totalSlots);
         const top = posA.top + posA.height;
         const height = posB.top - top;
         if (height > 6) gaps.push({ key: `${group[i].id}-${group[i + 1].id}`, top, height });
       }
     });
     return gaps;
-  }, [groupInfo, rowHeight]);
+  }, [groupInfo, rowHeight, startHour, totalSlots]);
 
   return (
     <div style={styles.staffCol}>
@@ -1514,15 +1531,15 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, ghostTimeOpacity, 
           {staff.name}
         </div>
       )}
-      <div style={{ ...styles.staffColBody, height: TOTAL_SLOTS * rowHeight }}>
-        {Array.from({ length: TOTAL_SLOTS }).map((_, i) => (
+      <div style={{ ...styles.staffColBody, height: totalSlots * rowHeight }}>
+        {Array.from({ length: totalSlots }).map((_, i) => (
           <button
             key={i}
-            onClick={() => onSlotClick(slotLabel(i))}
+            onClick={() => onSlotClick(slotLabel(i, startHour))}
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => {
               e.preventDefault();
-              onSlotDrop(slotLabel(i), e.dataTransfer.getData("text/plain"));
+              onSlotDrop(slotLabel(i, startHour), e.dataTransfer.getData("text/plain"));
             }}
             style={{
               ...styles.slotBtn,
@@ -1530,9 +1547,9 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, ghostTimeOpacity, 
               height: rowHeight,
               borderTop: i % 2 === 0 ? "1px solid #D9C4A8" : "1px dashed #E3D4BD",
             }}
-            aria-label={`Zakaži u ${slotLabel(i)}`}
+            aria-label={`Zakaži u ${slotLabel(i, startHour)}`}
           >
-            <span style={{ ...styles.slotGhostTime, color: `rgba(122,46,61,${ghostTimeOpacity ?? 0.32})` }}>{slotLabel(i)}</span>
+            <span style={{ ...styles.slotGhostTime, color: `rgba(122,46,61,${ghostTimeOpacity ?? 0.32})` }}>{slotLabel(i, startHour)}</span>
           </button>
         ))}
         {connectors.map((c) => (
@@ -1541,7 +1558,7 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, ghostTimeOpacity, 
           </div>
         ))}
         {appts.map((a) => {
-          const pos = apptPosition(a, rowHeight);
+          const pos = apptPosition(a, rowHeight, startHour, totalSlots);
           const blockHeight = Math.max(pos.height - 3, 16);
           const hasOwnPrice = a.price !== "" && a.price !== null && a.price !== undefined && !isNaN(a.price);
 
@@ -1669,6 +1686,7 @@ function ApptForm({
   const [price, setPrice] = useState(
     initial && initial.price !== undefined && initial.price !== null && initial.price !== "" ? String(initial.price) : ""
   );
+  const [paidByQR, setPaidByQR] = useState(initial?.paidByQR || false);
   const [duration, setDuration] = useState(
     initial?.duration ?? services.find((s) => s.name === (initial?.service || service))?.duration ?? 30
   );
@@ -1724,6 +1742,7 @@ function ApptForm({
       service: blocked ? "Blokirano" : useCustom ? customService.trim() : service,
       client: client.trim(),
       price: blocked ? "" : price === "" ? "" : Number(price),
+      paidByQR: blocked ? false : paidByQR,
       duration: Number(duration) || 30,
       blocked,
       linkToId: isContinuation && linkToId ? linkToId : null,
@@ -1892,6 +1911,10 @@ function ApptForm({
                 placeholder="Upiši kad se naplati"
                 style={styles.input}
               />
+              <label style={styles.qrCheckRow}>
+                <input type="checkbox" checked={paidByQR} onChange={(e) => setPaidByQR(e.target.checked)} />
+                <span>Plaćeno QR kodom</span>
+              </label>
             </div>
             )}
           </div>
@@ -2366,7 +2389,8 @@ function StatsView({ appointments, employees, clients, onImportData, onOpenPayro
 
   const paid = filtered.filter((a) => a.price !== "" && a.price !== null && a.price !== undefined && !isNaN(a.price));
   const totalRevenue = paid.reduce((s, a) => s + Number(a.price), 0);
-  const avgPrice = paid.length ? Math.round(totalRevenue / paid.length) : 0;
+  const qrRevenue = paid.filter((a) => a.paidByQR).reduce((s, a) => s + Number(a.price), 0);
+  const cashRevenue = totalRevenue - qrRevenue;
 
   const staffStats = employees.map((s) => {
     const mine = paid.filter((a) => a.staff === s.id);
@@ -2490,10 +2514,22 @@ function StatsView({ appointments, employees, clients, onImportData, onOpenPayro
         </div>
       )}
 
-      <div style={styles.summaryCards}>
-        <SummaryCard icon={<Banknote size={18} color="#7A2E3D" />} label="Ukupno naplaćeno" value={formatMoney(totalRevenue)} />
-        <SummaryCard icon={<CalendarDays size={18} color="#7A2E3D" />} label="Broj termina" value={filtered.length} />
-        <SummaryCard icon={<Users size={18} color="#7A2E3D" />} label="Prosečna cena" value={paid.length ? formatMoney(avgPrice) : "—"} />
+      <div style={styles.revenueCard}>
+        <Banknote size={20} color="#7A2E3D" />
+        <div style={styles.revenueCardValue}>{formatMoney(totalRevenue)}</div>
+        <div style={styles.revenueCardLabel}>Ukupno naplaćeno</div>
+        <div style={styles.revenueSplitRow}>
+          <div style={styles.revenueSplitItem}>
+            <span style={styles.revenueSplitLabel}>Keš</span>
+            <span style={styles.revenueSplitValue}>{formatMoney(cashRevenue)}</span>
+          </div>
+          <div style={styles.revenueSplitDivider} />
+          <div style={styles.revenueSplitItem}>
+            <span style={styles.revenueSplitLabel}>QR</span>
+            <span style={styles.revenueSplitValue}>{formatMoney(qrRevenue)}</span>
+          </div>
+        </div>
+        <div style={styles.revenueCardCount}>{filtered.length} {filtered.length === 1 ? "termin" : "termina"}</div>
       </div>
 
       <SectionTitle text="Po radniku" />
@@ -2581,16 +2617,6 @@ function StatsView({ appointments, employees, clients, onImportData, onOpenPayro
         <Settings size={15} />
         <span>Podešavanja</span>
       </button>
-    </div>
-  );
-}
-
-function SummaryCard({ icon, label, value }) {
-  return (
-    <div style={styles.summaryCard}>
-      {icon}
-      <div style={styles.summaryValue}>{value}</div>
-      <div style={styles.summaryLabel}>{label}</div>
     </div>
   );
 }
@@ -2834,6 +2860,7 @@ const styles = {
   dateFieldDisplayDisabled: { color: "#B4A296", background: "#F5EFE4" },
   staffChoiceRow: { display: "flex", gap: 8 },
   blockedCheckRow: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#5A473F", cursor: "pointer" },
+  qrCheckRow: { display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#5A473F", cursor: "pointer", marginTop: 8 },
   overlapWarning: {
     fontSize: 12, color: "#8A6216", background: "#FBF3E4", border: "1px solid #E8D2A0",
     borderRadius: 8, padding: "9px 12px", margin: "-6px 0 16px", lineHeight: 1.5,
@@ -2876,10 +2903,18 @@ const styles = {
   customRangeRow: { display: "flex", alignItems: "center", gap: 8, marginBottom: 14 },
   toLabel: { fontSize: 12.5, color: "#8A7368" },
 
-  summaryCards: { display: "flex", gap: 8, marginBottom: 20 },
-  summaryCard: { flex: 1, background: "#FFFDF9", border: "1px solid #EFE3D0", borderRadius: 12, padding: "14px 10px", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, textAlign: "center" },
-  summaryValue: { fontFamily: FONT_MONO, fontSize: 15, fontWeight: 600, color: "#2B1B1F" },
-  summaryLabel: { fontSize: 11, color: "#8A7368" },
+  revenueCard: {
+    background: "#FFFDF9", border: "1px solid #EFE3D0", borderRadius: 14, padding: "20px 16px",
+    display: "flex", flexDirection: "column", alignItems: "center", gap: 4, textAlign: "center", marginBottom: 20,
+  },
+  revenueCardValue: { fontFamily: FONT_MONO, fontSize: 26, fontWeight: 700, color: "#2B1B1F", marginTop: 2 },
+  revenueCardLabel: { fontSize: 12, color: "#8A7368" },
+  revenueSplitRow: { display: "flex", alignItems: "center", gap: 16, marginTop: 14 },
+  revenueSplitItem: { display: "flex", flexDirection: "column", alignItems: "center", gap: 3, minWidth: 70 },
+  revenueSplitLabel: { fontSize: 11, color: "#8A7368", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 },
+  revenueSplitValue: { fontFamily: FONT_MONO, fontSize: 15, fontWeight: 600, color: "#7A2E3D" },
+  revenueSplitDivider: { width: 1, height: 30, background: "#EFE3D0" },
+  revenueCardCount: { fontSize: 11.5, color: "#B4A296", marginTop: 12 },
 
   sectionTitle: { fontFamily: FONT_DISPLAY, fontSize: 15.5, fontWeight: 600, margin: "4px 0 10px" },
   chartCard: { background: "#FFFDF9", border: "1px solid #EFE3D0", borderRadius: 12, padding: "14px 8px 10px", marginBottom: 22 },
