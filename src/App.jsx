@@ -1182,14 +1182,6 @@ function DayTimelineView({
   const [pendingMove, setPendingMove] = useState(null); // { apptId, sourceAppt, targetStaffId, targetTime }
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
 
-  // Na desktopu, po difoltu se dnevni prikaz otvara u fullscreen modu kad se
-  // stigne ovde klikom na datum u kalendaru (ovaj efekat se pokreće samo pri
-  // svežem otvaranju ovog prikaza, ne pri svakoj izmeni unutar njega).
-  useEffect(() => {
-    if (isDesktop) setFullscreenOpen(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const handleDropOnSlot = (targetStaffId, targetTime, apptId) => {
     if (!apptId) return;
     const sourceAppt = dayAppts.find((a) => a.id === apptId);
