@@ -11,7 +11,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Cell, LabelList,
 } from "recharts";
 import {
-  Plus, X, ChevronLeft, ChevronRight, Trash2,
+  Plus, X, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, Trash2,
   CalendarDays, BarChart3, Banknote, Users, Download, Upload, Pencil, Lock, LogOut, AlertTriangle, Settings, Maximize2,
 } from "lucide-react";
 
@@ -32,8 +32,8 @@ const SEED_EMPLOYEES = [
 // će postojati podešavanje u Settings da se ovo menja bez izmene koda.
 const EMPLOYEE_NAME_ORDER_FALLBACK = { Bilja: 0, Ivana: 1, Tamara: 2 };
 function employeeSortKey(emp) {
-  if (emp.name in EMPLOYEE_NAME_ORDER_FALLBACK) return EMPLOYEE_NAME_ORDER_FALLBACK[emp.name];
   if (typeof emp.order === "number") return emp.order;
+  if (emp.name in EMPLOYEE_NAME_ORDER_FALLBACK) return EMPLOYEE_NAME_ORDER_FALLBACK[emp.name];
   return 99;
 }
 
@@ -375,6 +375,22 @@ export default function SalonApp() {
     };
   }, []);
 
+  // Samoispravka: ako "order" polje zaposlenih (u bazi) ne odgovara trenutno
+  // ispravnom redosledu, ispravi ga jednom. Ovo takođe automatski dodeli
+  // sledeći slobodan broj novododatom zaposlenom (kad se promeni broj njih).
+  useEffect(() => {
+    if (employees.length === 0) return;
+    const desired = [...employees].sort((a, b) => {
+      const ak = typeof a.order === "number" ? a.order : (a.name in EMPLOYEE_NAME_ORDER_FALLBACK ? EMPLOYEE_NAME_ORDER_FALLBACK[a.name] : 99);
+      const bk = typeof b.order === "number" ? b.order : (b.name in EMPLOYEE_NAME_ORDER_FALLBACK ? EMPLOYEE_NAME_ORDER_FALLBACK[b.name] : 99);
+      return ak - bk;
+    });
+    desired.forEach((emp, i) => {
+      if (emp.order !== i) updateEmployee(emp.id, { order: i });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employees.length]);
+
   /* ---- opšta podešavanja (npr. kontrast "duhova" vremena) ---- */
   useEffect(() => {
     const unsub = onSnapshot(
@@ -524,6 +540,35 @@ export default function SalonApp() {
       setSaveError(true);
     });
   };
+  const EMPLOYEE_COLOR_PALETTE = ["#7A2E3D", "#4A7A6B", "#C4914B", "#5C6BC0", "#8D6E63", "#00897B", "#AD6B8C"];
+  const addEmployee = (name) => {
+    const trimmed = (name || "").trim();
+    if (!trimmed) return;
+    addDoc(collection(db, COLLECTION_EMPLOYEES), {
+      name: trimmed,
+      color: EMPLOYEE_COLOR_PALETTE[employees.length % EMPLOYEE_COLOR_PALETTE.length],
+      calcType: "commission",
+      defaultPercentage: 40,
+      order: employees.length,
+    }).catch((e) => {
+      console.error(e);
+      setSaveError(true);
+    });
+  };
+  const moveEmployeeOrder = (id, direction) => {
+    const sorted = [...employees].sort((a, b) => employeeSortKey(a) - employeeSortKey(b));
+    const idx = sorted.findIndex((e) => e.id === id);
+    const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+    if (idx === -1 || swapIdx < 0 || swapIdx >= sorted.length) return;
+    updateEmployee(sorted[idx].id, { order: swapIdx });
+    updateEmployee(sorted[swapIdx].id, { order: idx });
+  };
+  const deleteEmployee = (id) => {
+    deleteDoc(doc(db, COLLECTION_EMPLOYEES, id)).catch((e) => {
+      console.error(e);
+      setSaveError(true);
+    });
+  };
   const deleteService = (id) => {
     deleteDoc(doc(db, COLLECTION_SERVICES, id)).catch((e) => {
       console.error(e);
@@ -658,6 +703,9 @@ export default function SalonApp() {
         <CalendarSettingsModal
           employees={employees}
           onUpdateEmployee={updateEmployee}
+          onAddEmployee={addEmployee}
+          onMoveEmployee={moveEmployeeOrder}
+          onDeleteEmployee={deleteEmployee}
           ghostTimeOpacity={ghostTimeOpacity}
           onUpdateGhostTimeOpacity={updateGhostTimeOpacity}
           onClose={() => setSettingsOpen(false)}
@@ -901,9 +949,18 @@ function MonthView({ appointments, employees, selectedDate, setSelectedDate, onS
   );
 }
 
-function CalendarSettingsModal({ employees, onUpdateEmployee, ghostTimeOpacity, onUpdateGhostTimeOpacity, onClose }) {
+function CalendarSettingsModal({ employees, onUpdateEmployee, onAddEmployee, onMoveEmployee, onDeleteEmployee, ghostTimeOpacity, onUpdateGhostTimeOpacity, onClose }) {
   const requestClose = useModalDismissal(onClose);
   const ghostPercent = Math.round((ghostTimeOpacity ?? 0.32) * 100);
+  const [addingOpen, setAddingOpen] = useState(false);
+  const [newName, setNewName] = useState("");
+
+  const handleAdd = () => {
+    if (!newName.trim()) return;
+    onAddEmployee(newName.trim());
+    setNewName("");
+    setAddingOpen(false);
+  };
 
   return (
     <div className="modal-overlay" style={styles.modalOverlay}>
@@ -915,10 +972,44 @@ function CalendarSettingsModal({ employees, onUpdateEmployee, ghostTimeOpacity, 
           </button>
         </div>
         <div style={styles.modalBody}>
-          <p style={styles.manageHint}>Ime i boja svake radnice na kalendaru i vremenskoj osi.</p>
-          {employees.map((emp) => (
-            <EmployeeSettingsRow key={emp.id} employee={emp} onUpdate={onUpdateEmployee} />
+          <p style={styles.manageHint}>Redosled, ime i boja svake radnice na kalendaru i vremenskoj osi.</p>
+          {employees.map((emp, i) => (
+            <EmployeeSettingsRow
+              key={emp.id}
+              index={i}
+              employee={emp}
+              onUpdate={onUpdateEmployee}
+              onMoveUp={i > 0 ? () => onMoveEmployee(emp.id, "up") : null}
+              onMoveDown={i < employees.length - 1 ? () => onMoveEmployee(emp.id, "down") : null}
+              onDelete={() => {
+                const ok = window.confirm(
+                  `Obrisati "${emp.name}"? Ovo ne briše već zakazane termine kod ove osobe — oni će ostati u kalendaru, samo će umesto imena pisati "?". Nastaviti?`
+                );
+                if (ok) onDeleteEmployee(emp.id);
+              }}
+            />
           ))}
+
+          {addingOpen ? (
+            <div style={styles.addEmployeeRow}>
+              <input
+                type="text"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+                placeholder="Ime nove radnice"
+                style={{ ...styles.input, flex: 1 }}
+                autoFocus
+              />
+              <button style={styles.saveBtnSmall} onClick={handleAdd}>Dodaj</button>
+              <button style={styles.cancelBtnSmall} onClick={() => { setAddingOpen(false); setNewName(""); }}>Otkaži</button>
+            </div>
+          ) : (
+            <button style={styles.addEmployeeBtn} onClick={() => setAddingOpen(true)}>
+              <Plus size={15} />
+              <span>Dodaj novog radnika</span>
+            </button>
+          )}
 
           <p style={{ ...styles.manageHint, marginTop: 20 }}>
             Kontrast blede oznake vremena u praznim terminima na vremenskoj osi ({ghostPercent}%).
@@ -945,7 +1036,7 @@ function CalendarSettingsModal({ employees, onUpdateEmployee, ghostTimeOpacity, 
   );
 }
 
-function EmployeeSettingsRow({ employee, onUpdate }) {
+function EmployeeSettingsRow({ employee, index, onUpdate, onMoveUp, onMoveDown, onDelete }) {
   const [name, setName] = useState(employee.name);
 
   const commitName = () => {
@@ -961,6 +1052,15 @@ function EmployeeSettingsRow({ employee, onUpdate }) {
 
   return (
     <div style={styles.colorRow}>
+      <div style={styles.orderBtnCol}>
+        <button style={{ ...styles.orderBtn, opacity: onMoveUp ? 1 : 0.3 }} onClick={onMoveUp} disabled={!onMoveUp} aria-label="Pomeri gore">
+          <ChevronUp size={14} />
+        </button>
+        <button style={{ ...styles.orderBtn, opacity: onMoveDown ? 1 : 0.3 }} onClick={onMoveDown} disabled={!onMoveDown} aria-label="Pomeri dole">
+          <ChevronDown size={14} />
+        </button>
+      </div>
+      <span style={styles.orderNumber}>{index + 1}.</span>
       <input
         type="text"
         value={name}
@@ -977,6 +1077,9 @@ function EmployeeSettingsRow({ employee, onUpdate }) {
         />
         <span style={{ ...styles.colorSwatch, background: employee.color }} />
       </label>
+      <button style={styles.employeeDeleteBtn} onClick={onDelete} aria-label={`Obriši ${employee.name}`}>
+        <Trash2 size={15} />
+      </button>
     </div>
   );
 }
@@ -2865,8 +2968,24 @@ const styles = {
     flex: 1, fontSize: 14, fontWeight: 600, color: "#2B1B1F", padding: "8px 10px",
     borderRadius: 8, border: "1px solid #E8DCC8", background: "#FFFDF9",
   },
+  orderBtnCol: { display: "flex", flexDirection: "column", gap: 1 },
+  orderBtn: {
+    width: 20, height: 16, display: "flex", alignItems: "center", justifyContent: "center",
+    border: "1px solid #E8DCC8", background: "#FFFDF9", color: "#7A2E3D", borderRadius: 4, padding: 0,
+  },
+  orderNumber: { fontSize: 12.5, color: "#B4A296", fontFamily: FONT_MONO, minWidth: 16 },
+  addEmployeeRow: { display: "flex", gap: 8, alignItems: "center", marginTop: 12 },
+  addEmployeeBtn: {
+    display: "flex", alignItems: "center", justifyContent: "center", gap: 6, width: "100%",
+    marginTop: 12, border: "1px dashed #C9BBAE", background: "transparent", color: "#7A2E3D",
+    borderRadius: 8, padding: "10px 14px", fontSize: 13, fontWeight: 600,
+  },
   colorSwatchLabel: { position: "relative", width: 34, height: 34, cursor: "pointer", display: "block" },
   colorSwatchInput: { position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer", border: "none", padding: 0 },
+  employeeDeleteBtn: {
+    width: 30, height: 30, flexShrink: 0, border: "1px solid #E3B8B8", background: "#FDF3F3",
+    color: "#A13A3A", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center",
+  },
   colorSwatch: { display: "block", width: "100%", height: "100%", borderRadius: "50%", border: "2px solid #FFFDF9", boxShadow: "0 0 0 1.5px #E8DCC8", pointerEvents: "none" },
   ghostSliderRow: { display: "flex", alignItems: "center", gap: 10 },
   ghostSlider: { flex: 1, accentColor: "#7A2E3D" },
