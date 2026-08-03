@@ -1622,6 +1622,7 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, ghostTimeOpacity, 
                   <span style={styles.apptBlockGroupTag}>🔗 {groupIndexLabel}</span>
                   <span style={serviceStyle}>{a.service}</span>
                   {displayClient && <span style={styles.apptBlockClient}>{displayClient}</span>}
+                  {isPaid && <span style={styles.apptBlockPrice}>{priceText}</span>}
                 </>
               ) : (
                 <>
@@ -1717,6 +1718,15 @@ function ApptForm({
     [appointments, staff, date, time, duration, initial]
   );
 
+  // Kad se uređuje postojeći termin koji je deo povezane usluge (npr. pauza
+  // kod bojenja), prikaži sa čim je povezan — samo informativno, za sada.
+  const linkedSiblings = useMemo(() => {
+    if (!initial?.groupId) return [];
+    return appointments
+      .filter((a) => a.groupId === initial.groupId && a.id !== initial.id)
+      .sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+  }, [appointments, initial]);
+
   const handleServiceChange = (name) => {
     setService(name);
     const match = services.find((s) => s.name === name);
@@ -1783,6 +1793,16 @@ function ApptForm({
               </button>
             </div>
           </div>
+
+          {linkedSiblings.length > 0 && (
+            <p style={styles.linkedNotice}>
+              🔗 Ovo je povezan termin (nastavak iste usluge) sa: {linkedSiblings.map((s, i) => (
+                <span key={s.id}>
+                  {i > 0 ? ", " : ""}{s.time} — {s.blocked ? "Blokirano" : s.service} ({staffById(s.staff, employees).name})
+                </span>
+              ))}
+            </p>
+          )}
 
           {overlap && (
             <p style={styles.overlapWarning}>
@@ -2863,6 +2883,10 @@ const styles = {
   qrCheckRow: { display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#5A473F", cursor: "pointer", marginTop: 8 },
   overlapWarning: {
     fontSize: 12, color: "#8A6216", background: "#FBF3E4", border: "1px solid #E8D2A0",
+    borderRadius: 8, padding: "9px 12px", margin: "-6px 0 16px", lineHeight: 1.5,
+  },
+  linkedNotice: {
+    fontSize: 12, color: "#7A2E3D", background: "#F5EDE0", border: "1px solid #E8DCC8",
     borderRadius: 8, padding: "9px 12px", margin: "-6px 0 16px", lineHeight: 1.5,
   },
   linkHint: { fontSize: 11.5, color: "#B4A296", marginTop: 8, lineHeight: 1.5 },
