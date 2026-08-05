@@ -476,6 +476,31 @@ export default function SalonApp() {
     }
   };
 
+  // Prevlačenje levo/desno kruži kroz tri osnovne kartice (Kalendar, Klijenti,
+  // Statistika) na mobilnom. Namerno se ne meša sa prevlačenjem NA samom
+  // kalendaru (koje menja mesec) niti sa dnevnim prikazom (koje menja dan) —
+  // aktivno je samo dok je view jedna od te tri osnovne kartice.
+  const TAB_ORDER = ["month", "clients", "stats"];
+  const tabSwipeStart = useRef(null);
+  const handleTabSwipeStart = (e) => {
+    if (!TAB_ORDER.includes(view)) return;
+    const t = e.touches[0];
+    tabSwipeStart.current = { x: t.clientX, y: t.clientY };
+  };
+  const handleTabSwipeEnd = (e) => {
+    if (!tabSwipeStart.current) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - tabSwipeStart.current.x;
+    const dy = t.clientY - tabSwipeStart.current.y;
+    tabSwipeStart.current = null;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      const idx = TAB_ORDER.indexOf(view);
+      if (idx === -1) return;
+      const nextIdx = dx < 0 ? (idx + 1) % TAB_ORDER.length : (idx - 1 + TAB_ORDER.length) % TAB_ORDER.length;
+      setView(TAB_ORDER[nextIdx]);
+    }
+  };
+
   // Brisanje svih podataka je nepovratna akcija, pa uvek iznova traži prijavu
   // (bez obzira da li je korisnik već ulogovan zbog Obračuna).
   const requestSecureReset = () => {
@@ -652,7 +677,12 @@ export default function SalonApp() {
           }}
         />
       ) : (
-      <div className="app-root" style={{ ...styles.appRoot, paddingBottom: 20 }}>
+      <div
+        className="app-root"
+        style={{ ...styles.appRoot, paddingBottom: 20 }}
+        onTouchStart={handleTabSwipeStart}
+        onTouchEnd={handleTabSwipeEnd}
+      >
       <Header view={view} setView={setView} saveError={saveError} />
 
       {!loaded ? (
@@ -878,10 +908,12 @@ function MonthView({ appointments, employees, selectedDate, setSelectedDate, onS
 
   const touchStart = useRef(null);
   const handleTouchStart = (e) => {
+    e.stopPropagation();
     const t = e.touches[0];
     touchStart.current = { x: t.clientX, y: t.clientY };
   };
   const handleTouchEnd = (e) => {
+    e.stopPropagation();
     if (!touchStart.current) return;
     const t = e.changedTouches[0];
     const dx = t.clientX - touchStart.current.x;
@@ -893,7 +925,7 @@ function MonthView({ appointments, employees, selectedDate, setSelectedDate, onS
   };
 
   return (
-    <div style={styles.monthWrap} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
+    <div style={styles.monthWrap}>
       <div style={styles.dateNav}>
         <button style={styles.navBtn} onClick={() => setSelectedDate((d) => addMonths(d, -1))} aria-label="Prethodni mesec">
           <ChevronLeft size={20} />
@@ -926,6 +958,8 @@ function MonthView({ appointments, employees, selectedDate, setSelectedDate, onS
 
       <div
         ref={gridRef}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
         style={{
           ...styles.monthGrid,
           ...(isDesktop && gridHeight ? { height: gridHeight, gridAutoRows: "minmax(0, 1fr)" } : {}),
@@ -1192,6 +1226,7 @@ function DayTimelineView({
   const filteredDayAppts = staffFilter === "all" ? dayAppts : dayAppts.filter((a) => a.staff === staffFilter);
   const dayTotal = filteredDayAppts.reduce((sum, a) => sum + (a.blocked ? 0 : Number(a.price) || 0), 0);
   const unpaidCount = filteredDayAppts.filter((a) => !a.blocked && !isApptPaid(a, dayAppts)).length;
+  const dayApptCount = filteredDayAppts.filter((a) => !a.blocked).length;
 
   const columns = staffFilter === "all" ? employees : [staffById(staffFilter, employees)];
   const wide = columns.length === 1;
@@ -1330,7 +1365,7 @@ function DayTimelineView({
 
       <div style={styles.dayTotalRow}>
         <span style={styles.dayTotalLabel}>
-          {filteredDayAppts.length} {filteredDayAppts.length === 1 ? "termin" : "termina"}
+          {dayApptCount} {dayApptCount === 1 ? "termin" : "termina"}
           {unpaidCount > 0 && (
             <span style={styles.dayTotalUnpaid}>
               {" "}(<AlertTriangle size={11} style={{ verticalAlign: "-1px" }} /> {unpaidCount} nenaplaćeno)
@@ -1370,7 +1405,7 @@ function DayTimelineView({
       {fullscreenOpen && (
         <FullscreenTimeline
           dateLabel={displayDateLong(selectedDate)}
-          apptCount={filteredDayAppts.length}
+          apptCount={dayApptCount}
           unpaidCount={unpaidCount}
           dayTotal={dayTotal}
           daySlots={daySlots}
@@ -2015,7 +2050,7 @@ function ApptForm({
 
         <div style={styles.modalFooter}>
           {onDelete && (
-            <button style={styles.deleteBtn} onClick={() => { onDelete(); requestClose(); }}>
+            <button style={styles.deleteBtn} onClick={() => { if (window.confirm("Da li ste sigurni?")) { onDelete(); requestClose(); } }}>
               <Trash2 size={16} />
               <span>Obriši</span>
             </button>
@@ -2287,7 +2322,7 @@ function ClientForm({ initial, onClose, onSave, onDelete }) {
 
         <div style={styles.modalFooter}>
           {onDelete && (
-            <button style={styles.deleteBtn} onClick={() => { onDelete(); requestClose(); }}>
+            <button style={styles.deleteBtn} onClick={() => { if (window.confirm("Da li ste sigurni?")) { onDelete(); requestClose(); } }}>
               <Trash2 size={16} />
               <span>Obriši</span>
             </button>
@@ -2408,6 +2443,7 @@ function StatsView({ appointments, employees, clients, onImportData, onOpenPayro
   }, [appointments, range]);
 
   const paid = filtered.filter((a) => a.price !== "" && a.price !== null && a.price !== undefined && !isNaN(a.price));
+  const nonBlockedCount = filtered.filter((a) => !a.blocked).length;
   const totalRevenue = paid.reduce((s, a) => s + Number(a.price), 0);
   const qrRevenue = paid.filter((a) => a.paidByQR).reduce((s, a) => s + Number(a.price), 0);
   const cashRevenue = totalRevenue - qrRevenue;
@@ -2549,7 +2585,7 @@ function StatsView({ appointments, employees, clients, onImportData, onOpenPayro
             <span style={styles.revenueSplitValue}>{formatMoney(qrRevenue)}</span>
           </div>
         </div>
-        <div style={styles.revenueCardCount}>{filtered.length} {filtered.length === 1 ? "termin" : "termina"}</div>
+        <div style={styles.revenueCardCount}>{nonBlockedCount} {nonBlockedCount === 1 ? "termin" : "termina"}</div>
       </div>
 
       <SectionTitle text="Po radniku" />
@@ -2628,7 +2664,7 @@ function StatsView({ appointments, employees, clients, onImportData, onOpenPayro
         </div>
         <div style={styles.resetZone}>
           <button style={styles.resetBtn} onClick={handleResetAll}>
-            Obriši sve podatke (za kraj testiranja)
+            Obriši sve podatke
           </button>
         </div>
       </div>
@@ -3019,19 +3055,19 @@ const styles = {
     flex: 1, fontSize: 14, fontWeight: 600, color: "#2B1B1F", padding: "8px 10px",
     borderRadius: 8, border: "1px solid #E8DCC8", background: "#FFFDF9",
   },
-  orderBtnCol: { display: "flex", flexDirection: "column", gap: 1 },
+  orderBtnCol: { display: "flex", flexDirection: "column", gap: 1, flexShrink: 0 },
   orderBtn: {
     width: 20, height: 16, display: "flex", alignItems: "center", justifyContent: "center",
     border: "1px solid #E8DCC8", background: "#FFFDF9", color: "#7A2E3D", borderRadius: 4, padding: 0,
   },
-  orderNumber: { fontSize: 12.5, color: "#B4A296", fontFamily: FONT_MONO, minWidth: 16 },
+  orderNumber: { fontSize: 12.5, color: "#B4A296", fontFamily: FONT_MONO, minWidth: 16, flexShrink: 0 },
   addEmployeeRow: { display: "flex", gap: 8, alignItems: "center", marginTop: 12 },
   addEmployeeBtn: {
     display: "flex", alignItems: "center", justifyContent: "center", gap: 6, width: "100%",
     marginTop: 12, border: "1px dashed #C9BBAE", background: "transparent", color: "#7A2E3D",
     borderRadius: 8, padding: "10px 14px", fontSize: 13, fontWeight: 600,
   },
-  colorSwatchLabel: { position: "relative", width: 34, height: 34, cursor: "pointer", display: "block" },
+  colorSwatchLabel: { position: "relative", width: 34, height: 34, minWidth: 34, minHeight: 34, flexShrink: 0, cursor: "pointer", display: "block" },
   colorSwatchInput: { position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer", border: "none", padding: 0 },
   employeeDeleteBtn: {
     width: 30, height: 30, flexShrink: 0, border: "1px solid #E3B8B8", background: "#FDF3F3",
