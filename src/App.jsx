@@ -575,10 +575,24 @@ export default function SalonApp() {
     });
   };
   const updateService = (id, patch) => {
+    const current = services.find((s) => s.id === id);
     updateDoc(doc(db, COLLECTION_SERVICES, id), patch).catch((e) => {
       console.error(e);
       setSaveError(true);
     });
+    // Ako je promenjeno ime usluge, prepiši ga i na sve već zakazane termine
+    // koji su koristili staro ime (obračuni koji su već zaključeni ostaju
+    // netaknuti — oni su namerno "zamrznut" istorijski zapis).
+    if (current && patch.name && patch.name !== current.name) {
+      appointments
+        .filter((a) => a.service === current.name)
+        .forEach((a) => {
+          updateDoc(doc(db, COLLECTION_APPOINTMENTS, a.id), { service: patch.name }).catch((e) => {
+            console.error(e);
+            setSaveError(true);
+          });
+        });
+    }
   };
   const updateEmployee = (id, patch) => {
     updateDoc(doc(db, COLLECTION_EMPLOYEES, id), patch).catch((e) => {
