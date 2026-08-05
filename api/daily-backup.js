@@ -8,13 +8,22 @@
 //
 // Šta radi, korak po korak:
 //   1. Pročita sve termine i sve klijente iz Firestore baze
+//      (preko Firebase Admin service account naloga)
 //   2. Napravi .json fajl (isti format kao ručni "Izvezi bekap")
 //   3. Napravi .xlsx fajl (isti format kao ručni "Izvezi u Excel")
-//   4. Otpremi oba fajla u podešeni folder na Google Drive-u salona
+//   4. Otpremi oba fajla u podešeni folder na Google Drive-u
+//      (preko OAuth naloga PRAVOG korisnika — vidi napomenu ispod)
+//
+// VAŽNA NAPOMENA o Google Drive-u:
+// Service account (robot-nalog) NEMA sopstveni prostor za skladištenje
+// na običnom (ne-Workspace) Google nalogu, pa ne može da kreira fajlove
+// čak ni u folderu koji mu je deljen. Zato se otpremanje na Drive radi
+// preko OAuth2 tokena PRAVOG Google naloga (jednokratno autorizovanog),
+// dok se čitanje Firestore baze i dalje radi preko service account-a
+// (to nema ograničenje sa skladištem, samo Drive upload ga ima).
 //
 // Potrebna podešavanja pre puštanja u rad — pogledaj uputstvo koje je
-// Claude dao uz ovaj fajl (kreiranje service account naloga, deljenje
-// Drive foldera, i dodavanje environment varijabli na Vercel-u).
+// Claude dao uz ovaj fajl.
 // ============================================================
 
 import { google } from "googleapis";
@@ -69,6 +78,22 @@ function bufferToStream(buffer) {
   return stream;
 }
 
+// Nalog PRAVOG korisnika (jednokratno autorizovan), koristi se SAMO za
+// otpremanje na Drive — Firestore čitanje ide preko service account-a.
+function getDriveOAuthClient() {
+  const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+  const refreshToken = process.env.GOOGLE_OAUTH_REFRESH_TOKEN;
+  if (!clientId || !clientSecret || !refreshToken) {
+    throw new Error(
+      "Nedostaju GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET / GOOGLE_OAUTH_REFRESH_TOKEN."
+    );
+  }
+  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret);
+  oauth2Client.setCredentials({ refresh_token: refreshToken });
+  return oauth2Client;
+}
+
 async function uploadToDrive(authClient, folderId, filename, mimeType, buffer) {
   const drive = google.drive({ version: "v3", auth: authClient });
   await drive.files.create({
@@ -98,11 +123,7 @@ export default async function handler(req, res) {
     const jsonBuffer = buildJsonBuffer(appointments, clients);
     const xlsxBuffer = buildXlsxBuffer(appointments, clients);
 
-    const googleAuth = new google.auth.GoogleAuth({
-      credentials: serviceAccount,
-      scopes: ["https://www.googleapis.com/auth/drive.file"],
-    });
-    const authClient = await googleAuth.getClient();
+    const authClient = getDriveOAuthClient();
 
     const folderId = process.env.BACKUP_DRIVE_FOLDER_ID;
     if (!folderId) {
