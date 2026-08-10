@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import {
   collection, doc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, getDocs, writeBatch,
 } from "firebase/firestore";
-import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
+import { onAuthStateChanged, signInWithEmailAndPassword, signInAnonymously, signOut } from "firebase/auth";
 import { db, auth } from "./firebase";
 import PayrollView from "./payroll/PayrollView.jsx";
 import * as XLSX from "xlsx";
@@ -435,6 +435,16 @@ export default function SalonApp() {
     });
   };
 
+  // Tiha (anonimna) prijava — omogućava da Firestore pravila zahtevaju da je
+  // zahtev "autentifikovan" (bez toga bi baza morala da bude potpuno otvorena
+  // ili bi prestala da radi kad istekne privremeno test-pravilo). Korisnice
+  // ovo ne primete — PIN ekran ostaje potpuno isti kao i do sad.
+  useEffect(() => {
+    signInAnonymously(auth).catch((e) => {
+      console.error("Anonimna prijava nije uspela:", e);
+    });
+  }, []);
+
   /* ---- auth (za obračun zarada) ---- */
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -469,7 +479,7 @@ export default function SalonApp() {
   };
 
   const openPayroll = () => {
-    if (user) setView("payroll");
+    if (user && !user.isAnonymous) setView("payroll");
     else {
       setLoginPurpose("payroll");
       setLoginOpen(true);
