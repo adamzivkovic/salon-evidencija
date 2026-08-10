@@ -537,10 +537,24 @@ export default function SalonApp() {
       const trimmed = (name || "").trim();
       if (!trimmed) return;
       if (id) {
+        const current = clients.find((c) => c.id === id);
         updateDoc(doc(db, COLLECTION_CLIENTS, id), { name: trimmed, phone: phone || "", note: note || "" }).catch((e) => {
           console.error(e);
           setSaveError(true);
         });
+        // Ako je promenjeno ime klijenta, prepiši ga i na sve već zakazane
+        // termine koji su koristili staro ime (isti princip kao kod
+        // preimenovanja usluga — zaključeni obračuni se ne diraju).
+        if (current && current.name !== trimmed) {
+          appointments
+            .filter((a) => a.client === current.name)
+            .forEach((a) => {
+              updateDoc(doc(db, COLLECTION_APPOINTMENTS, a.id), { client: trimmed }).catch((e) => {
+                console.error(e);
+                setSaveError(true);
+              });
+            });
+        }
         return;
       }
       const existing = clients.find((c) => c.name.toLowerCase() === trimmed.toLowerCase());
@@ -556,7 +570,7 @@ export default function SalonApp() {
         });
       }
     },
-    [clients]
+    [clients, appointments]
   );
   const deleteClient = (id) => {
     deleteDoc(doc(db, COLLECTION_CLIENTS, id)).catch((e) => {
