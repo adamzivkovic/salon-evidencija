@@ -276,6 +276,7 @@ export default function SalonApp() {
 
   const [user, setUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
@@ -287,8 +288,30 @@ export default function SalonApp() {
   const [editingId, setEditingId] = useState(null);
   const [prefill, setPrefill] = useState(null); // { date, time, staff }
 
+  // Tiha (anonimna) prijava — omogućava da Firestore pravila zahtevaju da je
+  // zahtev "autentifikovan". Podaci (termini/klijenti/...) se NE učitavaju
+  // dok se ovo ne završi (vidi authReady niže) — bez ovog čekanja, na iPhone
+  // "Add to Home Screen" instalaciji (koja ima potpuno svež, prazan prostor
+  // za čuvanje, odvojen od Safari taba) prijava zna da potraje delić sekunde
+  // duže, pa bi pokušaj učitavanja podataka pukao pre nego što se završi.
+  useEffect(() => {
+    signInAnonymously(auth).catch((e) => {
+      console.error("Anonimna prijava nije uspela:", e);
+    });
+  }, []);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthChecked(true);
+      if (u) setAuthReady(true);
+    });
+    return unsub;
+  }, []);
+
   /* ---- load (real-time) ---- */
   useEffect(() => {
+    if (!authReady) return; // sačekaj da se prijava (anonimna ili prava) uspostavi
     let apptsLoaded = false;
     let clientsLoaded = false;
     let servicesLoaded = false;
@@ -394,7 +417,7 @@ export default function SalonApp() {
       unsubServices();
       unsubEmployees();
     };
-  }, []);
+  }, [authReady]);
 
   // Samoispravka: ako "order" polje zaposlenih (u bazi) ne odgovara trenutno
   // ispravnom redosledu, ispravi ga jednom. Ovo takođe automatski dodeli
@@ -414,6 +437,7 @@ export default function SalonApp() {
 
   /* ---- opšta podešavanja (npr. kontrast "duhova" vremena) ---- */
   useEffect(() => {
+    if (!authReady) return;
     const unsub = onSnapshot(
       doc(db, "settings", "general"),
       (snap) => {
@@ -425,7 +449,7 @@ export default function SalonApp() {
       () => {}
     );
     return unsub;
-  }, []);
+  }, [authReady]);
 
   const updateGhostTimeOpacity = (value) => {
     setGhostTimeOpacity(value);
@@ -434,25 +458,6 @@ export default function SalonApp() {
       setSaveError(true);
     });
   };
-
-  // Tiha (anonimna) prijava — omogućava da Firestore pravila zahtevaju da je
-  // zahtev "autentifikovan" (bez toga bi baza morala da bude potpuno otvorena
-  // ili bi prestala da radi kad istekne privremeno test-pravilo). Korisnice
-  // ovo ne primete — PIN ekran ostaje potpuno isti kao i do sad.
-  useEffect(() => {
-    signInAnonymously(auth).catch((e) => {
-      console.error("Anonimna prijava nije uspela:", e);
-    });
-  }, []);
-
-  /* ---- auth (za obračun zarada) ---- */
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setAuthChecked(true);
-    });
-    return unsub;
-  }, []);
 
   const handleLogin = async (email, password) => {
     setLoginError("");
