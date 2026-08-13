@@ -822,17 +822,17 @@ export default function SalonApp() {
           onClose={closeForm}
           onSave={(data) => {
             const { linkToId, ...apptData } = data;
-            if (editingAppt) {
-              updateAppointment(editingAppt.id, apptData);
-            } else {
-              let groupId = null;
-              if (linkToId) {
-                const target = appointments.find((a) => a.id === linkToId);
-                if (target) {
-                  groupId = target.groupId || genId();
-                  if (!target.groupId) updateAppointment(target.id, { groupId });
-                }
+            let groupId = null;
+            if (linkToId) {
+              const target = appointments.find((a) => a.id === linkToId);
+              if (target) {
+                groupId = target.groupId || genId();
+                if (!target.groupId) updateAppointment(target.id, { groupId });
               }
+            }
+            if (editingAppt) {
+              updateAppointment(editingAppt.id, { ...apptData, ...(linkToId ? { groupId } : {}) });
+            } else {
               addAppointment({ ...apptData, groupId });
             }
             closeForm();
@@ -1258,6 +1258,11 @@ function useIsDesktop() {
 function DayTimelineView({
   appointments, employees, selectedDate, setSelectedDate, onBack, onSlotClick, onEditAppt, onMoveAppt, ghostTimeOpacity,
 }) {
+  // Isti mehanizam koji koriste modali (ESC/"nazad") — primenjen ovde da
+  // Android/browser dugme "nazad" na dnevnom prikazu vrati na kalendar,
+  // umesto da izađe iz cele aplikacije.
+  useModalDismissal(onBack);
+
   const [staffFilter, setStaffFilter] = useState("all");
   const isDesktop = useIsDesktop();
   const key = dateKey(selectedDate);
@@ -1454,6 +1459,8 @@ function DayTimelineView({
           daySlots={daySlots}
           renderTimelineGrid={renderTimelineGrid}
           onClose={() => setFullscreenOpen(false)}
+          onPrevDay={() => setSelectedDate((d) => addDays(d, -1))}
+          onNextDay={() => setSelectedDate((d) => addDays(d, 1))}
         />
       )}
     </div>
@@ -1463,7 +1470,7 @@ function DayTimelineView({
 // Prikaz vremenske ose preko celog ekrana, uvek smanjen/uvećan (transform: scale)
 // tako da ceo raspon 10:00-20:00 stane bez skrolovanja, bez obzira na veličinu
 // ekrana. ESC ili "nazad" zatvara (isti mehanizam kao ostali prozori).
-function FullscreenTimeline({ dateLabel, apptCount, unpaidCount, dayTotal, daySlots, renderTimelineGrid, onClose }) {
+function FullscreenTimeline({ dateLabel, apptCount, unpaidCount, dayTotal, daySlots, renderTimelineGrid, onClose, onPrevDay, onNextDay }) {
   const requestClose = useModalDismissal(onClose);
   const stageRef = useRef(null);
   const [rowHeight, setRowHeight] = useState(ROW_HEIGHT);
@@ -1484,17 +1491,25 @@ function FullscreenTimeline({ dateLabel, apptCount, unpaidCount, dayTotal, daySl
   return (
     <div style={styles.fullscreenOverlay}>
       <div style={styles.fullscreenTopBar}>
-        <div style={styles.fullscreenTopBarLeft}>
-          <span style={styles.fullscreenDate}>{dateLabel}</span>
-          <span style={styles.fullscreenStats}>
-            {apptCount} {apptCount === 1 ? "termin" : "termina"}
-            {unpaidCount > 0 && (
-              <span style={styles.dayTotalUnpaid}>
-                {" "}(<AlertTriangle size={11} style={{ verticalAlign: "-1px" }} /> {unpaidCount} nenaplaćeno)
-              </span>
-            )}
-            <span style={styles.fullscreenStatsMoney}> · {formatMoney(dayTotal)}</span>
-          </span>
+        <div style={styles.fullscreenNavGroup}>
+          <button style={styles.fullscreenNavBtn} onClick={onPrevDay} aria-label="Prethodni dan">
+            <ChevronLeft size={20} />
+          </button>
+          <div style={styles.fullscreenTopBarLeft}>
+            <span style={styles.fullscreenDate}>{dateLabel}</span>
+            <span style={styles.fullscreenStats}>
+              {apptCount} {apptCount === 1 ? "termin" : "termina"}
+              {unpaidCount > 0 && (
+                <span style={styles.dayTotalUnpaid}>
+                  {" "}(<AlertTriangle size={11} style={{ verticalAlign: "-1px" }} /> {unpaidCount} nenaplaćeno)
+                </span>
+              )}
+              <span style={styles.fullscreenStatsMoney}> · {formatMoney(dayTotal)}</span>
+            </span>
+          </div>
+          <button style={styles.fullscreenNavBtn} onClick={onNextDay} aria-label="Sledeći dan">
+            <ChevronRight size={20} />
+          </button>
         </div>
         <button style={styles.fullscreenCloseBtn} onClick={requestClose} aria-label="Zatvori">
           <X size={20} />
@@ -1781,12 +1796,12 @@ function ApptForm({
     return clients.find((c) => c.name.toLowerCase() === name) || null;
   }, [client, clients]);
 
-  // Termini istog radnika, istog dana, koji bi mogli biti "prvi deo" ove usluge
-  // (npr. nanošenje boje pre pauze) — nudi se samo pri kreiranju novog termina.
+  // Termini istog radnika, istog dana, koji bi mogli biti "prvi deo" ove
+  // usluge (npr. nanošenje boje pre pauze) — nudi se i pri kreiranju novog
+  // termina i pri izmeni već postojećeg (nezavisnog, još nepovezanog) termina.
   const linkCandidates = useMemo(() => {
-    if (initial) return [];
     return appointments
-      .filter((a) => a.staff === staff && a.date === date && !a.blocked)
+      .filter((a) => a.staff === staff && a.date === date && !a.blocked && a.id !== initial?.id)
       .slice()
       .sort((a, b) => (a.time || "").localeCompare(b.time || ""));
   }, [appointments, staff, date, initial]);
@@ -1917,7 +1932,7 @@ function ApptForm({
             </label>
           </div>
 
-          {!initial && !blocked && linkCandidates.length > 0 && (
+          {!blocked && !initial?.groupId && linkCandidates.length > 0 && (
             <div style={styles.fieldRow}>
               <label style={styles.blockedCheckRow}>
                 <input
@@ -2863,6 +2878,11 @@ const styles = {
     padding: "14px 20px", borderBottom: "1px solid #EFE3D0", flexShrink: 0,
   },
   fullscreenDate: { fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 600 },
+  fullscreenNavGroup: { display: "flex", alignItems: "center", gap: 12, flex: 1, justifyContent: "center" },
+  fullscreenNavBtn: {
+    width: 34, height: 34, borderRadius: "50%", border: "1px solid #E8DCC8", background: "#FFFDF9",
+    color: "#5A473F", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+  },
   fullscreenTopBarLeft: { display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" },
   fullscreenStats: { fontSize: 12.5, color: "#8A7368" },
   fullscreenStatsMoney: { fontFamily: FONT_MONO, color: "#7A2E3D", fontWeight: 600 },
