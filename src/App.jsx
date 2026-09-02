@@ -1545,7 +1545,7 @@ function DateField({ value, onChange, disabled }) {
   const inputRef = useRef(null);
 
   const openPicker = () => {
-    if (disabled || !supportsShowPicker) return;
+    if (disabled) return;
     const el = inputRef.current;
     if (!el) return;
     try {
@@ -1555,15 +1555,32 @@ function DateField({ value, onChange, disabled }) {
     }
   };
 
+  if (!supportsShowPicker) {
+    // iPhone (Safari) — više pokušaja da se nativno polje sakrije uz naš
+    // prikaz nije uspelo (Safari dosledno odbija da otvori kalendar čim
+    // "namiriše" bilo kakvu prepreku). Ovde se zato prikazuje PRAVO,
+    // vidljivo nativno polje — možda ne u dd.mm.gggg formatu, ali
+    // garantovano radi, jer ništa ne stoji na putu nativnom ponašanju.
+    return (
+      <input
+        type="date"
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+        style={styles.input}
+      />
+    );
+  }
+
   return (
-    <div style={styles.dateFieldWrap} onClick={supportsShowPicker ? openPicker : undefined}>
+    <div style={styles.dateFieldWrap} onClick={openPicker}>
       <input
         ref={inputRef}
         type="date"
         value={value}
         onChange={onChange}
         disabled={disabled}
-        style={{ ...styles.dateFieldNative, pointerEvents: supportsShowPicker ? "none" : "auto" }}
+        style={{ ...styles.dateFieldNative, pointerEvents: "none" }}
       />
       <div style={{ ...styles.dateFieldDisplay, ...(disabled ? styles.dateFieldDisplayDisabled : {}) }}>
         <span>{value ? formatDateInputDisplay(value) : "dd.mm.gggg."}</span>
