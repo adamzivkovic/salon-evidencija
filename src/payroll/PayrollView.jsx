@@ -34,30 +34,44 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
+// Da li ovaj browser uopšte ume da otvori kalendar programski (showPicker) —
+// Android Chrome i desktop browseri umeju, ali Safari na iPhone-u NIKAD nije
+// implementirao ovu funkciju (provereno zvanično, WebKit bug 261703).
+const supportsShowPicker =
+  typeof window !== "undefined" &&
+  typeof HTMLInputElement !== "undefined" &&
+  "showPicker" in HTMLInputElement.prototype;
+
 // Zamena za <input type="date"> koja UVEK prikazuje dd.mm.gggg, bez obzira
 // na jezik uređaja/browsera (nativni prikaz to ne poštuje pouzdano svuda).
-// Klik bilo gde na okvir programski otvara kalendar (showPicker).
+// Na browserima koji podržavaju showPicker, klik bilo gde na okvir programski
+// otvara kalendar. Na iPhone-u (Safari showPicker uopšte ne podržava) se
+// pušta da nativno polje samo "oseti" dodir direktno — jedini način da se
+// tamo kalendar zaista otvori.
 function DateField({ value, onChange, disabled }) {
   const inputRef = useRef(null);
 
   const openPicker = () => {
-    if (disabled) return;
+    if (disabled || !supportsShowPicker) return;
     const el = inputRef.current;
     if (!el) return;
-    if (typeof el.showPicker === "function") {
-      try {
-        el.showPicker();
-      } catch (e) {
-        el.focus();
-      }
-    } else {
+    try {
+      el.showPicker();
+    } catch (e) {
       el.focus();
     }
   };
 
   return (
     <div style={styles.dateFieldWrap} onClick={openPicker}>
-      <input ref={inputRef} type="date" value={value} onChange={onChange} disabled={disabled} style={styles.dateFieldNative} />
+      <input
+        ref={inputRef}
+        type="date"
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+        style={{ ...styles.dateFieldNative, pointerEvents: supportsShowPicker ? "none" : "auto" }}
+      />
       <div style={{ ...styles.dateFieldDisplay, ...(disabled ? styles.dateFieldDisplayDisabled : {}) }}>
         <span>{value ? formatDateSr(value) : "dd.mm.gggg."}</span>
         <CalendarDays size={15} color="#8A7368" />

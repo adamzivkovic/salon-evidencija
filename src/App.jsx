@@ -1522,25 +1522,32 @@ function FullscreenTimeline({ dateLabel, apptCount, unpaidCount, dayTotal, daySl
   );
 }
 
+// Da li ovaj browser uopšte ume da otvori kalendar programski (showPicker) —
+// Android Chrome i desktop browseri umeju, ali Safari na iPhone-u NIKAD nije
+// implementirao ovu funkciju (provereno zvanično, WebKit bug 261703). Zato se
+// polje ponaša drugačije zavisno od toga.
+const supportsShowPicker =
+  typeof window !== "undefined" &&
+  typeof HTMLInputElement !== "undefined" &&
+  "showPicker" in HTMLInputElement.prototype;
+
 // Zamena za <input type="date"> koja UVEK prikazuje dd.mm.gggg — nativno
 // polje ostaje potpuno funkcionalno (isti kalendar/picker), samo je vizuelno
-// sakriveno, a preko njega stoji naš sopstveni, dosledan prikaz datuma. Klik
-// bilo gde na okvir programski otvara kalendar (showPicker), da ne zavisi od
-// toga da li se pogodi tačna, nevidljiva zona pravе ikonice.
+// sakriveno, a preko njega stoji naš sopstveni, dosledan prikaz datuma.
+// Na browserima koji podržavaju showPicker (Android/desktop), klik bilo gde
+// na okvir programski otvara kalendar. Na iPhone-u (Safari showPicker ne
+// podržava uopšte) se umesto toga pušta da samo nativno polje "oseti" dodir
+// direktno — to je jedini način da se tamo pravi kalendar zaista otvori.
 function DateField({ value, onChange, disabled }) {
   const inputRef = useRef(null);
 
   const openPicker = () => {
-    if (disabled) return;
+    if (disabled || !supportsShowPicker) return;
     const el = inputRef.current;
     if (!el) return;
-    if (typeof el.showPicker === "function") {
-      try {
-        el.showPicker();
-      } catch (e) {
-        el.focus();
-      }
-    } else {
+    try {
+      el.showPicker();
+    } catch (e) {
       el.focus();
     }
   };
@@ -1553,7 +1560,7 @@ function DateField({ value, onChange, disabled }) {
         value={value}
         onChange={onChange}
         disabled={disabled}
-        style={styles.dateFieldNative}
+        style={{ ...styles.dateFieldNative, pointerEvents: supportsShowPicker ? "none" : "auto" }}
       />
       <div style={{ ...styles.dateFieldDisplay, ...(disabled ? styles.dateFieldDisplayDisabled : {}) }}>
         <span>{value ? formatDateInputDisplay(value) : "dd.mm.gggg."}</span>
@@ -2649,10 +2656,10 @@ function StatsView({ appointments, employees, clients, onImportData, onOpenPayro
       <SectionTitle text="Po radniku" />
       <div style={styles.chartCard}>
         <ResponsiveContainer width="100%" height={210}>
-          <BarChart data={staffStats} margin={{ top: 22, right: 12, left: -12, bottom: 0 }}>
+          <BarChart data={staffStats} margin={{ top: 22, right: 12, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#E8DCC8" vertical={false} />
             <XAxis dataKey="name" tick={{ fill: "#5A473F", fontSize: 12, fontFamily: "'Work Sans', sans-serif" }} axisLine={{ stroke: "#E8DCC8" }} tickLine={false} />
-            <YAxis tick={{ fill: "#8A7368", fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }} axisLine={false} tickLine={false} width={54} />
+            <YAxis tick={false} axisLine={false} tickLine={false} width={0} />
             <Bar dataKey="total" radius={[6, 6, 0, 0]}>
               {staffStats.map((s, i) => (
                 <Cell key={i} fill={s.color} />
