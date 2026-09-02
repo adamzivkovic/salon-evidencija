@@ -1534,10 +1534,13 @@ const supportsShowPicker =
 // Zamena za <input type="date"> koja UVEK prikazuje dd.mm.gggg — nativno
 // polje ostaje potpuno funkcionalno (isti kalendar/picker), samo je vizuelno
 // sakriveno, a preko njega stoji naš sopstveni, dosledan prikaz datuma.
-// Na browserima koji podržavaju showPicker (Android/desktop), klik bilo gde
-// na okvir programski otvara kalendar. Na iPhone-u (Safari showPicker ne
-// podržava uopšte) se umesto toga pušta da samo nativno polje "oseti" dodir
-// direktno — to je jedini način da se tamo pravi kalendar zaista otvori.
+// Na browserima koji podržavaju showPicker (Android/desktop), okvir ima svoj
+// klik-osluškivač koji programski otvara kalendar. Na iPhone-u (Safari
+// showPicker ne podržava uopšte) taj osluškivač se NE dodaje ni na okvir —
+// dokumentovano je da Safari odbija da otvori kalendar na dodir polja ako
+// bilo koji roditeljski element ima sopstveni "klik" hendler, čak i prazan.
+// Nativno polje tako samo, direktno, prima dodir — jedini način da se tamo
+// kalendar zaista otvori.
 function DateField({ value, onChange, disabled }) {
   const inputRef = useRef(null);
 
@@ -1553,7 +1556,7 @@ function DateField({ value, onChange, disabled }) {
   };
 
   return (
-    <div style={styles.dateFieldWrap} onClick={openPicker}>
+    <div style={styles.dateFieldWrap} onClick={supportsShowPicker ? openPicker : undefined}>
       <input
         ref={inputRef}
         type="date"

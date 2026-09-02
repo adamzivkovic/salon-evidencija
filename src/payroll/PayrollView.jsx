@@ -63,7 +63,7 @@ function DateField({ value, onChange, disabled }) {
   };
 
   return (
-    <div style={styles.dateFieldWrap} onClick={openPicker}>
+    <div style={styles.dateFieldWrap} onClick={supportsShowPicker ? openPicker : undefined}>
       <input
         ref={inputRef}
         type="date"
