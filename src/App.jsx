@@ -1522,11 +1522,20 @@ function FullscreenTimeline({ dateLabel, apptCount, unpaidCount, dayTotal, daySl
   );
 }
 
-// Da li ovaj browser uopšte ume da otvori kalendar programski (showPicker) —
-// Android Chrome i desktop browseri umeju, ali Safari na iPhone-u NIKAD nije
-// implementirao ovu funkciju (provereno zvanično, WebKit bug 261703). Zato se
-// polje ponaša drugačije zavisno od toga.
+// Da li je ovo iPhone/iPad — na njima se prikazuje potpuno običan, vidljiv
+// nativni datum-birač (vidi DateField niže). Ranije smo probali da to
+// prepoznamo preko provere "da li browser ima showPicker funkciju", ali se
+// pokazalo da ta provera na nekim iPhone/Safari verzijama pogrešno javlja
+// da JESTE podržano, iako u praksi ne radi — zato sad proveravamo direktno
+// koji je uređaj u pitanju, bez nagađanja mogućnosti.
+const isIOS =
+  typeof navigator !== "undefined" &&
+  (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    // iPad u "desktop" režimu prijavljuje se kao Mac, ali ima dodir ekrana —
+    // ovo hvata i taj slučaj.
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
 const supportsShowPicker =
+  !isIOS &&
   typeof window !== "undefined" &&
   typeof HTMLInputElement !== "undefined" &&
   "showPicker" in HTMLInputElement.prototype;

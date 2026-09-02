@@ -34,10 +34,16 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
-// Da li ovaj browser uopšte ume da otvori kalendar programski (showPicker) —
-// Android Chrome i desktop browseri umeju, ali Safari na iPhone-u NIKAD nije
-// implementirao ovu funkciju (provereno zvanično, WebKit bug 261703).
+// Da li je ovo iPhone/iPad — na njima se prikazuje potpuno običan, vidljiv
+// nativni datum-birač (vidi DateField niže). Provera "da li browser ima
+// showPicker funkciju" se pokazala nepouzdanom na nekim iPhone/Safari
+// verzijama (pogrešno javlja podržano), zato proveravamo direktno uređaj.
+const isIOS =
+  typeof navigator !== "undefined" &&
+  (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
 const supportsShowPicker =
+  !isIOS &&
   typeof window !== "undefined" &&
   typeof HTMLInputElement !== "undefined" &&
   "showPicker" in HTMLInputElement.prototype;
