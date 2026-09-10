@@ -546,12 +546,13 @@ export default function SalonApp() {
     updateAppointment(id, { staff: newStaff, time: newTime });
   };
 
-  // Smena 1 je 10:00-16:00, smena 2 je 14:00-20:00 (namerno se preklapaju).
-  // Kad se izabere smena u kojoj radnica RADI, blokira se opseg one DRUGE
-  // smene (koju ne radi) — sa oznakom koju smenu je izabrala.
+  // Smena 1 je 10:00-16:00, smena 2 je 14:00-20:00 (preklapaju se 14-16h).
+  // Kad se izabere smena u kojoj radnica RADI, blokira se samo onaj deo dana
+  // kad NIJE tu (bez preklapajućeg dela, da se ne blokira vreme kad stvarno
+  // radi) — sa oznakom koju smenu je izabrala.
   const SHIFT_BLOCK_RANGE = {
-    "1": { time: "14:00", duration: 360 }, // blokira opseg 2. smene
-    "2": { time: "10:00", duration: 360 }, // blokira opseg 1. smene
+    "1": { time: "16:00", duration: 240 }, // blokira 16:00-20:00
+    "2": { time: "10:00", duration: 240 }, // blokira 10:00-14:00
   };
   const setEmployeeShift = (staffId, dateKeyStr, shiftNumber) => {
     const existing = appointments.find(
@@ -559,9 +560,30 @@ export default function SalonApp() {
     );
     if (!shiftNumber) {
       if (existing) deleteAppointment(existing.id);
-      return;
+      return true;
     }
     const range = SHIFT_BLOCK_RANGE[shiftNumber];
+    const rangeStart = timeToMinutes(range.time);
+    const rangeEnd = rangeStart + range.duration;
+
+    // Ne dozvoli postavljanje smene ako bi to blokiralo termin koji je već
+    // zakazan u tom opsegu — umesto tihog preklapanja, javi upozorenje.
+    const conflict = appointments.find((a) => {
+      if (a.staff !== staffId || a.date !== dateKeyStr || a.blocked || !a.time) return false;
+      if (existing && a.id === existing.id) return false;
+      const start = timeToMinutes(a.time);
+      const end = start + (Number(a.duration) || 30);
+      return start < rangeEnd && rangeStart < end;
+    });
+    if (conflict) {
+      const endH = String(Math.floor(rangeEnd / 60)).padStart(2, "0");
+      const endM = String(rangeEnd % 60).padStart(2, "0");
+      window.alert(
+        `Nije moguće postaviti ${shiftNumber}. smenu — u periodu ${range.time}–${endH}:${endM} već postoji zakazan termin "${conflict.service}"${conflict.client ? ` (${conflict.client})` : ""} u ${conflict.time}. Prvo pomeri ili obriši taj termin, pa pokušaj ponovo.`
+      );
+      return false;
+    }
+
     const patch = {
       date: dateKeyStr,
       staff: staffId,
@@ -575,6 +597,7 @@ export default function SalonApp() {
     };
     if (existing) updateAppointment(existing.id, patch);
     else addAppointment(patch);
+    return true;
   };
 
   /* ---- client CRUD ---- */
@@ -1503,8 +1526,8 @@ function DayTimelineView({
           staffName={shiftPickerStaff.name}
           currentShift={dayAppts.find((a) => a.staff === shiftPickerStaff.id && a.blocked && a.shift)?.shift || null}
           onPick={(shiftNumber) => {
-            onSetShift(shiftPickerStaff.id, key, shiftNumber);
-            setShiftPickerStaff(null);
+            const ok = onSetShift(shiftPickerStaff.id, key, shiftNumber);
+            if (ok) setShiftPickerStaff(null);
           }}
           onClose={() => setShiftPickerStaff(null)}
         />
