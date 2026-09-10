@@ -546,6 +546,37 @@ export default function SalonApp() {
     updateAppointment(id, { staff: newStaff, time: newTime });
   };
 
+  // Smena 1 je 10:00-16:00, smena 2 je 14:00-20:00 (namerno se preklapaju).
+  // Kad se izabere smena u kojoj radnica RADI, blokira se opseg one DRUGE
+  // smene (koju ne radi) — sa oznakom koju smenu je izabrala.
+  const SHIFT_BLOCK_RANGE = {
+    "1": { time: "14:00", duration: 360 }, // blokira opseg 2. smene
+    "2": { time: "10:00", duration: 360 }, // blokira opseg 1. smene
+  };
+  const setEmployeeShift = (staffId, dateKeyStr, shiftNumber) => {
+    const existing = appointments.find(
+      (a) => a.staff === staffId && a.date === dateKeyStr && a.blocked && a.shift
+    );
+    if (!shiftNumber) {
+      if (existing) deleteAppointment(existing.id);
+      return;
+    }
+    const range = SHIFT_BLOCK_RANGE[shiftNumber];
+    const patch = {
+      date: dateKeyStr,
+      staff: staffId,
+      blocked: true,
+      service: "Blokirano",
+      time: range.time,
+      duration: range.duration,
+      shift: shiftNumber,
+      price: "",
+      client: "",
+    };
+    if (existing) updateAppointment(existing.id, patch);
+    else addAppointment(patch);
+  };
+
   /* ---- client CRUD ---- */
   const saveClient = useCallback(
     (id, name, phone, note) => {
@@ -756,6 +787,7 @@ export default function SalonApp() {
           }
           onEditAppt={openEditForm}
           onMoveAppt={moveAppointment}
+          onSetShift={setEmployeeShift}
         />
       ) : view === "clients" ? (
         <ClientsView clients={clients} onSave={saveClient} onDelete={deleteClient} />
@@ -1014,7 +1046,7 @@ function MonthView({ appointments, employees, selectedDate, setSelectedDate, onS
           const today = isToday(d);
           const dayAppts = apptsByDay[key] || [];
           const staffPresent = employees.filter(
-            (s) => (staffFilter === "all" || s.id === staffFilter) && dayAppts.some((a) => a.staff === s.id)
+            (s) => (staffFilter === "all" || s.id === staffFilter) && dayAppts.some((a) => a.staff === s.id && !a.blocked)
           );
           return (
             <button
@@ -1256,7 +1288,7 @@ function useIsDesktop() {
 }
 
 function DayTimelineView({
-  appointments, employees, selectedDate, setSelectedDate, onBack, onSlotClick, onEditAppt, onMoveAppt, ghostTimeOpacity,
+  appointments, employees, selectedDate, setSelectedDate, onBack, onSlotClick, onEditAppt, onMoveAppt, ghostTimeOpacity, onSetShift,
 }) {
   // Isti mehanizam koji koriste modali (ESC/"nazad") — primenjen ovde da
   // Android/browser dugme "nazad" na dnevnom prikazu vrati na kalendar,
@@ -1264,6 +1296,7 @@ function DayTimelineView({
   useModalDismissal(onBack);
 
   const [staffFilter, setStaffFilter] = useState("all");
+  const [shiftPickerStaff, setShiftPickerStaff] = useState(null); // { id, name } ili null
   const isDesktop = useIsDesktop();
   const key = dateKey(selectedDate);
 
@@ -1337,6 +1370,7 @@ function DayTimelineView({
           ghostTimeOpacity={ghostTimeOpacity}
           clickableHeader={staffFilter === "all"}
           onHeaderClick={() => setStaffFilter(staff.id)}
+          onOpenShiftMenu={() => setShiftPickerStaff(staff)}
           onSlotClick={(time) => onSlotClick(staff.id, time)}
           onEditAppt={onEditAppt}
           onSlotDrop={(time, apptId) => handleDropOnSlot(staff.id, time, apptId)}
@@ -1463,6 +1497,54 @@ function DayTimelineView({
           onNextDay={() => setSelectedDate((d) => addDays(d, 1))}
         />
       )}
+
+      {shiftPickerStaff && (
+        <ShiftPickerModal
+          staffName={shiftPickerStaff.name}
+          currentShift={dayAppts.find((a) => a.staff === shiftPickerStaff.id && a.blocked && a.shift)?.shift || null}
+          onPick={(shiftNumber) => {
+            onSetShift(shiftPickerStaff.id, key, shiftNumber);
+            setShiftPickerStaff(null);
+          }}
+          onClose={() => setShiftPickerStaff(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ShiftPickerModal({ staffName, currentShift, onPick, onClose }) {
+  const requestClose = useModalDismissal(onClose);
+
+  return (
+    <div className="modal-overlay" style={styles.modalOverlay}>
+      <div className="modal-card" style={styles.shiftPickerCard} onClick={(e) => e.stopPropagation()}>
+        <div style={styles.modalHeader}>
+          <span style={styles.modalTitle}>Smena — {staffName}</span>
+          <button style={styles.iconBtn} onClick={requestClose} aria-label="Zatvori">
+            <X size={20} />
+          </button>
+        </div>
+        <div style={styles.modalBody}>
+          <button
+            style={{ ...styles.shiftOptionBtn, ...(currentShift === "1" ? styles.shiftOptionBtnActive : {}) }}
+            onClick={() => onPick("1")}
+          >
+            1. smena (10:00–16:00)
+          </button>
+          <button
+            style={{ ...styles.shiftOptionBtn, ...(currentShift === "2" ? styles.shiftOptionBtnActive : {}) }}
+            onClick={() => onPick("2")}
+          >
+            2. smena (14:00–20:00)
+          </button>
+          {currentShift && (
+            <button style={styles.cancelBtn} onClick={() => onPick(null)}>
+              Ukloni smenu
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1615,7 +1697,7 @@ function RibbonTab({ label, active, color, onClick }) {
   );
 }
 
-function StaffTimelineColumn({ staff, appts, wide, isDesktop, ghostTimeOpacity, clickableHeader, onHeaderClick, onSlotClick, onEditAppt, onSlotDrop, rowHeight = ROW_HEIGHT, stickyHeader = true, startHour = WORK_START_HOUR, totalSlots = TOTAL_SLOTS }) {
+function StaffTimelineColumn({ staff, appts, wide, isDesktop, ghostTimeOpacity, clickableHeader, onHeaderClick, onOpenShiftMenu, onSlotClick, onEditAppt, onSlotDrop, rowHeight = ROW_HEIGHT, stickyHeader = true, startHour = WORK_START_HOUR, totalSlots = TOTAL_SLOTS }) {
   const groupInfo = useMemo(() => {
     const byGroup = {};
     appts.forEach((a) => {
@@ -1642,6 +1724,39 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, ghostTimeOpacity, 
     return gaps;
   }, [groupInfo, rowHeight, startHour, totalSlots]);
 
+  // Dugi pritisak (mobilni) ili desni klik (desktop) na ime radnice otvara
+  // izbor smene — kratak klik/tap i dalje samo filtrira prikaz kao do sad.
+  const pressTimer = useRef(null);
+  const pressMoved = useRef(false);
+  const longPressFired = useRef(false);
+
+  const handlePressStart = () => {
+    pressMoved.current = false;
+    longPressFired.current = false;
+    pressTimer.current = setTimeout(() => {
+      longPressFired.current = true;
+      onOpenShiftMenu();
+    }, 550);
+  };
+  const handlePressMove = () => {
+    pressMoved.current = true;
+    clearTimeout(pressTimer.current);
+  };
+  const handlePressEnd = () => {
+    clearTimeout(pressTimer.current);
+  };
+  const handleHeaderClick = () => {
+    if (longPressFired.current) {
+      longPressFired.current = false;
+      return;
+    }
+    onHeaderClick();
+  };
+  const handleContextMenu = (e) => {
+    e.preventDefault();
+    onOpenShiftMenu();
+  };
+
   return (
     <div style={styles.staffCol}>
       {clickableHeader ? (
@@ -1650,13 +1765,23 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, ghostTimeOpacity, 
             ...styles.staffColHeader, ...styles.staffColHeaderBtn, background: staff.color,
             ...(stickyHeader ? {} : { position: "relative" }),
           }}
-          onClick={onHeaderClick}
+          onClick={handleHeaderClick}
+          onTouchStart={handlePressStart}
+          onTouchMove={handlePressMove}
+          onTouchEnd={handlePressEnd}
+          onContextMenu={handleContextMenu}
           aria-label={`Prikaži samo ${staff.name}`}
         >
           {staff.name}
         </button>
       ) : (
-        <div style={{ ...styles.staffColHeader, background: staff.color, ...(stickyHeader ? {} : { position: "relative" }) }}>
+        <div
+          style={{ ...styles.staffColHeader, background: staff.color, ...(stickyHeader ? {} : { position: "relative" }) }}
+          onTouchStart={handlePressStart}
+          onTouchMove={handlePressMove}
+          onTouchEnd={handlePressEnd}
+          onContextMenu={handleContextMenu}
+        >
           {staff.name}
         </div>
       )}
@@ -1744,7 +1869,11 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, ghostTimeOpacity, 
               {a.blocked ? (
                 <>
                   <span style={serviceStyle}>🚫 Blokirano</span>
-                  {showClientLine && displayClient && <span style={styles.apptBlockClient}>{displayClient}</span>}
+                  {a.shift ? (
+                    <span style={styles.apptBlockClient}>{a.shift}. smena</span>
+                  ) : (
+                    showClientLine && displayClient && <span style={styles.apptBlockClient}>{displayClient}</span>
+                  )}
                 </>
               ) : useGroupedMobileLayout ? (
                 <>
@@ -2994,6 +3123,15 @@ const styles = {
     background: "#FBF6EE", width: "100%", maxWidth: 560,
     maxHeight: "88vh", display: "flex", flexDirection: "column", overflow: "hidden",
   },
+  shiftPickerCard: {
+    background: "#FBF6EE", width: "100%", maxWidth: 380, borderRadius: 16,
+    display: "flex", flexDirection: "column", overflow: "hidden",
+  },
+  shiftOptionBtn: {
+    width: "100%", padding: "14px 16px", borderRadius: 10, border: "1.5px solid #E8DCC8",
+    background: "#FFFDF9", color: "#2B1B1F", fontSize: 14.5, fontWeight: 600, marginBottom: 10, textAlign: "left",
+  },
+  shiftOptionBtnActive: { borderColor: "#7A2E3D", background: "#F5EBE8", color: "#7A2E3D" },
   modalHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 18px", borderBottom: "1px solid #EFE3D0" },
   modalTitle: { fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 600 },
   iconBtn: { border: "none", background: "none", color: "#5A473F", padding: 4 },
