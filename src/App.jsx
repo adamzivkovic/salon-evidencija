@@ -284,6 +284,30 @@ export default function SalonApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [ghostTimeOpacity, setGhostTimeOpacity] = useState(0.32);
 
+  // "Ko si ti?" — identitet radnice na ovom uređaju (čuva se lokalno).
+  // "-" znači "ne koristim kao radnica" (npr. vlasnica) — bez obaveštenja.
+  const [myId, setMyId] = useState(() => {
+    try {
+      return localStorage.getItem("salon-me") || "";
+    } catch (e) {
+      return "";
+    }
+  });
+  const [identityOpen, setIdentityOpen] = useState(false);
+  const [identitySkipped, setIdentitySkipped] = useState(false);
+  // Trenutak do kog su obaveštenja pročitana; prvi put = sada (da se ne prikaže stara istorija).
+  const [seenAt, setSeenAt] = useState(() => {
+    try {
+      const v = Number(localStorage.getItem("salon-seen-at"));
+      if (v) return v;
+      const now = Date.now();
+      localStorage.setItem("salon-seen-at", String(now));
+      return now;
+    } catch (e) {
+      return Date.now();
+    }
+  });
+
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [prefill, setPrefill] = useState(null); // { date, time, staff }
@@ -542,8 +566,88 @@ export default function SalonApp() {
       setSaveError(true);
     });
   };
+  // Ko je i kad poslednji menjao termin — osnova za obaveštenja.
+  const meValid = employees.some((e) => e.id === myId);
+  const stamp = () => (meValid ? { modifiedBy: myId, modifiedAt: Date.now() } : {});
+
   const moveAppointment = (id, newStaff, newTime) => {
-    updateAppointment(id, { staff: newStaff, time: newTime });
+    updateAppointment(id, { staff: newStaff, time: newTime, ...stamp() });
+  };
+
+  const chooseIdentity = (id) => {
+    try {
+      localStorage.setItem("salon-me", id);
+    } catch (e) {}
+    setMyId(id);
+    setIdentityOpen(false);
+  };
+  const markNoticesSeen = () => {
+    const now = Date.now();
+    try {
+      localStorage.setItem("salon-seen-at", String(now));
+    } catch (e) {}
+    setSeenAt(now);
+  };
+  // Termini koje je neko DRUGI zakazao/izmenio meni, a još ih nisam videla.
+  const notices = useMemo(() => {
+    if (!meValid) return [];
+    return appointments
+      .filter((a) => !a.blocked && a.staff === myId && a.modifiedBy && a.modifiedBy !== myId && a.modifiedAt > seenAt)
+      .sort((a, b) => b.modifiedAt - a.modifiedAt);
+  }, [appointments, myId, meValid, seenAt]);
+
+  // Smena 1 je 10:00-16:00, smena 2 je 14:00-20:00 (preklapaju se 14-16h).
+  // Kad se izabere smena u kojoj radnica RADI, blokira se samo onaj deo dana
+  // kad NIJE tu (bez preklapajućeg dela, da se ne blokira vreme kad stvarno
+  // radi) — sa oznakom koju smenu je izabrala.
+  const SHIFT_BLOCK_RANGE = {
+    "1": { time: "16:00", duration: 240 }, // blokira 16:00-20:00
+    "2": { time: "10:00", duration: 240 }, // blokira 10:00-14:00
+  };
+  const setEmployeeShift = (staffId, dateKeyStr, shiftNumber) => {
+    const existing = appointments.find(
+      (a) => a.staff === staffId && a.date === dateKeyStr && a.blocked && a.shift
+    );
+    if (!shiftNumber) {
+      if (existing) deleteAppointment(existing.id);
+      return true;
+    }
+    const range = SHIFT_BLOCK_RANGE[shiftNumber];
+    const rangeStart = timeToMinutes(range.time);
+    const rangeEnd = rangeStart + range.duration;
+
+    // Ne dozvoli postavljanje smene ako bi to blokiralo termin koji je već
+    // zakazan u tom opsegu — umesto tihog preklapanja, javi upozorenje.
+    const conflict = appointments.find((a) => {
+      if (a.staff !== staffId || a.date !== dateKeyStr || a.blocked || !a.time) return false;
+      if (existing && a.id === existing.id) return false;
+      const start = timeToMinutes(a.time);
+      const end = start + (Number(a.duration) || 30);
+      return start < rangeEnd && rangeStart < end;
+    });
+    if (conflict) {
+      const endH = String(Math.floor(rangeEnd / 60)).padStart(2, "0");
+      const endM = String(rangeEnd % 60).padStart(2, "0");
+      window.alert(
+        `Nije moguće postaviti ${shiftNumber}. smenu — u periodu ${range.time}–${endH}:${endM} već postoji zakazan termin "${conflict.service}"${conflict.client ? ` (${conflict.client})` : ""} u ${conflict.time}. Prvo pomeri ili obriši taj termin, pa pokušaj ponovo.`
+      );
+      return false;
+    }
+
+    const patch = {
+      date: dateKeyStr,
+      staff: staffId,
+      blocked: true,
+      service: "Blokirano",
+      time: range.time,
+      duration: range.duration,
+      shift: shiftNumber,
+      price: "",
+      client: "",
+    };
+    if (existing) updateAppointment(existing.id, patch);
+    else addAppointment(patch);
+    return true;
   };
 
   /* ---- client CRUD ---- */
@@ -726,7 +830,41 @@ export default function SalonApp() {
         onTouchStart={handleTabSwipeStart}
         onTouchEnd={handleTabSwipeEnd}
       >
-      <Header view={view} setView={setView} saveError={saveError} />
+      <Header
+        view={view}
+        setView={setView}
+        saveError={saveError}
+        meName={employees.find((e) => e.id === myId)?.name}
+        onOpenIdentity={() => setIdentityOpen(true)}
+      />
+
+      {loaded && notices.length > 0 && (
+        <div style={styles.noticeBar}>
+          {notices.slice(0, 3).map((a) => {
+            const by = employees.find((e) => e.id === a.modifiedBy)?.name || "Neko";
+            const [yy, mm, dd] = String(a.date).split("-");
+            return (
+              <button
+                key={a.id}
+                style={styles.noticeItem}
+                onClick={() => {
+                  const [y, m, d] = String(a.date).split("-").map(Number);
+                  setSelectedDate(new Date(y, m - 1, d));
+                  setView("day");
+                  markNoticesSeen();
+                }}
+              >
+                🔔 <b>{by}</b> ti je dodelila termin: {dd}.{mm}. u {a.time} — {a.service}
+                {a.client ? ` (${a.client})` : ""}
+              </button>
+            );
+          })}
+          {notices.length > 3 && <div style={styles.noticeMore}>…i još {notices.length - 3}</div>}
+          <button style={styles.noticeDismiss} onClick={markNoticesSeen}>
+            Pročitano
+          </button>
+        </div>
+      )}
 
       {!loaded ? (
         <div style={styles.loadingWrap}>
@@ -756,6 +894,7 @@ export default function SalonApp() {
           }
           onEditAppt={openEditForm}
           onMoveAppt={moveAppointment}
+          onSetShift={setEmployeeShift}
         />
       ) : view === "clients" ? (
         <ClientsView clients={clients} onSave={saveClient} onDelete={deleteClient} />
@@ -806,6 +945,18 @@ export default function SalonApp() {
         />
       )}
 
+      {loaded && employees.length > 0 && (identityOpen || (!myId && !identitySkipped)) && (
+        <IdentityModal
+          employees={employees}
+          currentId={myId}
+          onPick={chooseIdentity}
+          onClose={() => {
+            setIdentityOpen(false);
+            setIdentitySkipped(true);
+          }}
+        />
+      )}
+
       {formOpen && (
         <ApptForm
           initial={editingAppt}
@@ -831,9 +982,9 @@ export default function SalonApp() {
               }
             }
             if (editingAppt) {
-              updateAppointment(editingAppt.id, { ...apptData, ...(linkToId ? { groupId } : {}) });
+              updateAppointment(editingAppt.id, { ...apptData, ...(linkToId ? { groupId } : {}), ...stamp() });
             } else {
-              addAppointment({ ...apptData, groupId });
+              addAppointment({ ...apptData, groupId, ...(meValid ? { createdBy: myId } : {}), ...stamp() });
             }
             closeForm();
           }}
@@ -857,9 +1008,12 @@ export default function SalonApp() {
 /* Header                                                              */
 /* ------------------------------------------------------------------ */
 
-function Header({ view, setView, saveError }) {
+function Header({ view, setView, saveError, meName, onOpenIdentity }) {
   return (
     <div style={styles.header}>
+      <button style={styles.identityChip} onClick={onOpenIdentity}>
+        👤 {meName || "Ko si ti?"}
+      </button>
       {saveError && <div style={styles.saveErrorBanner}>⚠️ Čuvanje nije uspelo — proveri internet konekciju</div>}
       <div style={styles.tabRow}>
         <button
@@ -1014,7 +1168,7 @@ function MonthView({ appointments, employees, selectedDate, setSelectedDate, onS
           const today = isToday(d);
           const dayAppts = apptsByDay[key] || [];
           const staffPresent = employees.filter(
-            (s) => (staffFilter === "all" || s.id === staffFilter) && dayAppts.some((a) => a.staff === s.id)
+            (s) => (staffFilter === "all" || s.id === staffFilter) && dayAppts.some((a) => a.staff === s.id && !a.blocked)
           );
           return (
             <button
@@ -1256,7 +1410,7 @@ function useIsDesktop() {
 }
 
 function DayTimelineView({
-  appointments, employees, selectedDate, setSelectedDate, onBack, onSlotClick, onEditAppt, onMoveAppt, ghostTimeOpacity,
+  appointments, employees, selectedDate, setSelectedDate, onBack, onSlotClick, onEditAppt, onMoveAppt, ghostTimeOpacity, onSetShift,
 }) {
   // Isti mehanizam koji koriste modali (ESC/"nazad") — primenjen ovde da
   // Android/browser dugme "nazad" na dnevnom prikazu vrati na kalendar,
@@ -1264,6 +1418,7 @@ function DayTimelineView({
   useModalDismissal(onBack);
 
   const [staffFilter, setStaffFilter] = useState("all");
+  const [shiftPickerStaff, setShiftPickerStaff] = useState(null); // { id, name } ili null
   const isDesktop = useIsDesktop();
   const key = dateKey(selectedDate);
 
@@ -1337,6 +1492,7 @@ function DayTimelineView({
           ghostTimeOpacity={ghostTimeOpacity}
           clickableHeader={staffFilter === "all"}
           onHeaderClick={() => setStaffFilter(staff.id)}
+          onOpenShiftMenu={() => setShiftPickerStaff(staff)}
           onSlotClick={(time) => onSlotClick(staff.id, time)}
           onEditAppt={onEditAppt}
           onSlotDrop={(time, apptId) => handleDropOnSlot(staff.id, time, apptId)}
@@ -1463,6 +1619,87 @@ function DayTimelineView({
           onNextDay={() => setSelectedDate((d) => addDays(d, 1))}
         />
       )}
+
+      {shiftPickerStaff && (
+        <ShiftPickerModal
+          staffName={shiftPickerStaff.name}
+          currentShift={dayAppts.find((a) => a.staff === shiftPickerStaff.id && a.blocked && a.shift)?.shift || null}
+          onPick={(shiftNumber) => {
+            const ok = onSetShift(shiftPickerStaff.id, key, shiftNumber);
+            if (ok) setShiftPickerStaff(null);
+          }}
+          onClose={() => setShiftPickerStaff(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function IdentityModal({ employees, currentId, onPick, onClose }) {
+  const requestClose = useModalDismissal(onClose);
+  return (
+    <div className="modal-overlay" style={styles.modalOverlay}>
+      <div className="modal-card" style={styles.shiftPickerCard} onClick={(e) => e.stopPropagation()}>
+        <div style={styles.modalHeader}>
+          <span style={styles.modalTitle}>Ko si ti?</span>
+          <button style={styles.iconBtn} onClick={requestClose} aria-label="Zatvori">
+            <X size={20} />
+          </button>
+        </div>
+        <div style={styles.modalBody}>
+          <p style={{ fontSize: 13, color: "#8A7368", margin: "0 0 12px" }}>
+            Da bi ti stizala obaveštenja kad ti neko zakaže termin. Pamti se samo na ovom uređaju.
+          </p>
+          {employees.map((e) => (
+            <button
+              key={e.id}
+              style={{ ...styles.shiftOptionBtn, ...(currentId === e.id ? styles.shiftOptionBtnActive : {}) }}
+              onClick={() => onPick(e.id)}
+            >
+              {e.name}
+            </button>
+          ))}
+          <button style={styles.cancelBtn} onClick={() => onPick("-")}>
+            Ne koristim kao radnica (bez obaveštenja)
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ShiftPickerModal({ staffName, currentShift, onPick, onClose }) {
+  const requestClose = useModalDismissal(onClose);
+
+  return (
+    <div className="modal-overlay" style={styles.modalOverlay}>
+      <div className="modal-card" style={styles.shiftPickerCard} onClick={(e) => e.stopPropagation()}>
+        <div style={styles.modalHeader}>
+          <span style={styles.modalTitle}>Smena — {staffName}</span>
+          <button style={styles.iconBtn} onClick={requestClose} aria-label="Zatvori">
+            <X size={20} />
+          </button>
+        </div>
+        <div style={styles.modalBody}>
+          <button
+            style={{ ...styles.shiftOptionBtn, ...(currentShift === "1" ? styles.shiftOptionBtnActive : {}) }}
+            onClick={() => onPick("1")}
+          >
+            1. smena (10:00–16:00)
+          </button>
+          <button
+            style={{ ...styles.shiftOptionBtn, ...(currentShift === "2" ? styles.shiftOptionBtnActive : {}) }}
+            onClick={() => onPick("2")}
+          >
+            2. smena (14:00–20:00)
+          </button>
+          {currentShift && (
+            <button style={styles.cancelBtn} onClick={() => onPick(null)}>
+              Ukloni smenu
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1615,7 +1852,7 @@ function RibbonTab({ label, active, color, onClick }) {
   );
 }
 
-function StaffTimelineColumn({ staff, appts, wide, isDesktop, ghostTimeOpacity, clickableHeader, onHeaderClick, onSlotClick, onEditAppt, onSlotDrop, rowHeight = ROW_HEIGHT, stickyHeader = true, startHour = WORK_START_HOUR, totalSlots = TOTAL_SLOTS }) {
+function StaffTimelineColumn({ staff, appts, wide, isDesktop, ghostTimeOpacity, clickableHeader, onHeaderClick, onOpenShiftMenu, onSlotClick, onEditAppt, onSlotDrop, rowHeight = ROW_HEIGHT, stickyHeader = true, startHour = WORK_START_HOUR, totalSlots = TOTAL_SLOTS }) {
   const groupInfo = useMemo(() => {
     const byGroup = {};
     appts.forEach((a) => {
@@ -1642,6 +1879,39 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, ghostTimeOpacity, 
     return gaps;
   }, [groupInfo, rowHeight, startHour, totalSlots]);
 
+  // Dugi pritisak (mobilni) ili desni klik (desktop) na ime radnice otvara
+  // izbor smene — kratak klik/tap i dalje samo filtrira prikaz kao do sad.
+  const pressTimer = useRef(null);
+  const pressMoved = useRef(false);
+  const longPressFired = useRef(false);
+
+  const handlePressStart = () => {
+    pressMoved.current = false;
+    longPressFired.current = false;
+    pressTimer.current = setTimeout(() => {
+      longPressFired.current = true;
+      onOpenShiftMenu();
+    }, 550);
+  };
+  const handlePressMove = () => {
+    pressMoved.current = true;
+    clearTimeout(pressTimer.current);
+  };
+  const handlePressEnd = () => {
+    clearTimeout(pressTimer.current);
+  };
+  const handleHeaderClick = () => {
+    if (longPressFired.current) {
+      longPressFired.current = false;
+      return;
+    }
+    onHeaderClick();
+  };
+  const handleContextMenu = (e) => {
+    e.preventDefault();
+    onOpenShiftMenu();
+  };
+
   return (
     <div style={styles.staffCol}>
       {clickableHeader ? (
@@ -1650,13 +1920,23 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, ghostTimeOpacity, 
             ...styles.staffColHeader, ...styles.staffColHeaderBtn, background: staff.color,
             ...(stickyHeader ? {} : { position: "relative" }),
           }}
-          onClick={onHeaderClick}
+          onClick={handleHeaderClick}
+          onTouchStart={handlePressStart}
+          onTouchMove={handlePressMove}
+          onTouchEnd={handlePressEnd}
+          onContextMenu={handleContextMenu}
           aria-label={`Prikaži samo ${staff.name}`}
         >
           {staff.name}
         </button>
       ) : (
-        <div style={{ ...styles.staffColHeader, background: staff.color, ...(stickyHeader ? {} : { position: "relative" }) }}>
+        <div
+          style={{ ...styles.staffColHeader, background: staff.color, ...(stickyHeader ? {} : { position: "relative" }) }}
+          onTouchStart={handlePressStart}
+          onTouchMove={handlePressMove}
+          onTouchEnd={handlePressEnd}
+          onContextMenu={handleContextMenu}
+        >
           {staff.name}
         </div>
       )}
@@ -1744,7 +2024,11 @@ function StaffTimelineColumn({ staff, appts, wide, isDesktop, ghostTimeOpacity, 
               {a.blocked ? (
                 <>
                   <span style={serviceStyle}>🚫 Blokirano</span>
-                  {showClientLine && displayClient && <span style={styles.apptBlockClient}>{displayClient}</span>}
+                  {a.shift ? (
+                    <span style={styles.apptBlockClient}>{a.shift}. smena</span>
+                  ) : (
+                    showClientLine && displayClient && <span style={styles.apptBlockClient}>{displayClient}</span>
+                  )}
                 </>
               ) : useGroupedMobileLayout ? (
                 <>
@@ -2994,6 +3278,31 @@ const styles = {
     background: "#FBF6EE", width: "100%", maxWidth: 560,
     maxHeight: "88vh", display: "flex", flexDirection: "column", overflow: "hidden",
   },
+  shiftPickerCard: {
+    background: "#FBF6EE", width: "100%", maxWidth: 380, borderRadius: 16,
+    display: "flex", flexDirection: "column", overflow: "hidden",
+  },
+  shiftOptionBtn: {
+    width: "100%", padding: "14px 16px", borderRadius: 10, border: "1.5px solid #E8DCC8",
+    background: "#FFFDF9", color: "#2B1B1F", fontSize: 14.5, fontWeight: 600, marginBottom: 10, textAlign: "left",
+  },
+  identityChip: {
+    display: "block", marginLeft: "auto", border: "1px solid #E8DCC8", background: "#FFFDF9", color: "#5A473F",
+    borderRadius: 999, padding: "3px 10px", fontSize: 12, fontWeight: 600, marginBottom: 2,
+  },
+  noticeBar: {
+    background: "#FFF4E0", border: "1px solid #E8C98F", borderRadius: 10, margin: "8px 12px 0",
+    padding: "8px 10px", display: "flex", flexDirection: "column", gap: 6,
+  },
+  noticeItem: {
+    border: "none", background: "none", textAlign: "left", fontSize: 13.5, color: "#2B1B1F", padding: "4px 2px",
+  },
+  noticeMore: { fontSize: 12, color: "#8A7368" },
+  noticeDismiss: {
+    alignSelf: "flex-end", border: "1px solid #C4914B", background: "#FFFDF9", color: "#7A5A1E",
+    borderRadius: 8, padding: "4px 12px", fontSize: 12.5, fontWeight: 600,
+  },
+  shiftOptionBtnActive: { borderColor: "#7A2E3D", background: "#F5EBE8", color: "#7A2E3D" },
   modalHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 18px", borderBottom: "1px solid #EFE3D0" },
   modalTitle: { fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 600 },
   iconBtn: { border: "none", background: "none", color: "#5A473F", padding: 4 },
