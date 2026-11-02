@@ -29,7 +29,11 @@ export default async function handler(req, res) {
     init();
     const m = /^Bearer (.+)$/.exec(req.headers.authorization || "");
     if (!m) return res.status(401).json({ error: "auth" });
-    await getAuth().verifyIdToken(m[1]); // samo prijavljeni korisnici aplikacije
+    try {
+      await getAuth().verifyIdToken(m[1]); // samo prijavljeni korisnici aplikacije
+    } catch (e) {
+      return res.status(401).json({ error: "auth" });
+    }
 
     const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
     const messages = Array.isArray(body.messages) ? body.messages.slice(0, 6) : [];
