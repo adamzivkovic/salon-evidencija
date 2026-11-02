@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
-  collection, doc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, getDocs, writeBatch,
+  collection, doc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, getDocs, writeBatch, query, where,
 } from "firebase/firestore";
 import { onAuthStateChanged, signInWithEmailAndPassword, signInAnonymously, signOut } from "firebase/auth";
 import { db, auth } from "./firebase";
@@ -265,7 +265,24 @@ export default function SalonApp() {
     }
   });
   const isDesktop = useIsDesktop();
-  const [appointments, setAppointments] = useState([]);
+  // Da se pri svakom otvaranju ne čita cela istorija (štedi Firestore kvotu), uživo se prati samo
+  // period od 1. u prošlom mesecu pa nadalje (+ svi budući termini). Stariji termini se učitaju
+  // jednokratno, tek kad zatrebaju (Statistika, Obračun, raniji meseci u kalendaru).
+  const [cutoffKey] = useState(() => {
+    const n = new Date();
+    return dateKey(new Date(n.getFullYear(), n.getMonth() - 1, 1));
+  });
+  const [recentAppts, setRecentAppts] = useState([]);
+  const [olderAppts, setOlderAppts] = useState([]);
+  const [historyState, setHistoryState] = useState("idle"); // idle | loading | loaded | error
+  const historyPromiseRef = useRef(null);
+  const appointments = useMemo(() => {
+    if (!olderAppts.length) return recentAppts;
+    const ids = new Set(recentAppts.map((a) => a.id));
+    return [...recentAppts, ...olderAppts.filter((a) => !ids.has(a.id))];
+  }, [recentAppts, olderAppts]);
+  const apptsRef = useRef([]);
+  apptsRef.current = appointments;
   const [clients, setClients] = useState([]);
   const [services, setServices] = useState([]);
   const [employees, setEmployees] = useState([]);
@@ -351,9 +368,9 @@ export default function SalonApp() {
     };
 
     const unsubAppts = onSnapshot(
-      collection(db, COLLECTION_APPOINTMENTS),
+      query(collection(db, COLLECTION_APPOINTMENTS), where("date", ">=", cutoffKey)),
       (snap) => {
-        setAppointments(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        setRecentAppts(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
         setSaveError(false);
         apptsLoaded = true;
         checkLoaded();
@@ -554,8 +571,11 @@ export default function SalonApp() {
   };
 
   /* ---- appointment CRUD ---- */
+  // Stariji termini (pre cutoff-a) nisu u uživo upitu, pa se njihove izmene ovde i lokalno održavaju.
   const addAppointment = (appt) => {
-    addDoc(collection(db, COLLECTION_APPOINTMENTS), appt).catch((e) => {
+    const ref = doc(collection(db, COLLECTION_APPOINTMENTS));
+    if (appt.date && appt.date < cutoffKey) setOlderAppts((prev) => [...prev, { id: ref.id, ...appt }]);
+    setDoc(ref, appt).catch((e) => {
       console.error(e);
       setSaveError(true);
     });
@@ -565,13 +585,68 @@ export default function SalonApp() {
       console.error(e);
       setSaveError(true);
     });
+    setOlderAppts((prev) => {
+      const idx = prev.findIndex((a) => a.id === id);
+      if (idx >= 0) {
+        const merged = { ...prev[idx], ...patch };
+        // vraćen u "nedavni" period — dalje ga prati uživo upit
+        return merged.date >= cutoffKey ? prev.filter((a) => a.id !== id) : prev.map((a) => (a.id === id ? merged : a));
+      }
+      if (patch.date && patch.date < cutoffKey) {
+        const cur = apptsRef.current.find((a) => a.id === id);
+        if (cur) return [...prev, { ...cur, ...patch }];
+      }
+      return prev;
+    });
   };
   const deleteAppointment = (id) => {
     deleteDoc(doc(db, COLLECTION_APPOINTMENTS, id)).catch((e) => {
       console.error(e);
       setSaveError(true);
     });
+    setOlderAppts((prev) => (prev.some((a) => a.id === id) ? prev.filter((a) => a.id !== id) : prev));
   };
+
+  // Jednokratno učitavanje starijih termina (kad zatrebaju); rezultat se pamti do kraja sesije.
+  const ensureHistory = useCallback(() => {
+    if (historyPromiseRef.current) return historyPromiseRef.current;
+    setHistoryState("loading");
+    const p = getDocs(query(collection(db, COLLECTION_APPOINTMENTS), where("date", "<", cutoffKey)))
+      .then((snap) => {
+        setOlderAppts((prev) => {
+          const have = new Set(prev.map((a) => a.id));
+          return [...prev, ...snap.docs.filter((d) => !have.has(d.id)).map((d) => ({ id: d.id, ...d.data() }))];
+        });
+        setHistoryState("loaded");
+      })
+      .catch((e) => {
+        console.error(e);
+        historyPromiseRef.current = null;
+        setHistoryState("error");
+      });
+    historyPromiseRef.current = p;
+    return p;
+  }, [cutoffKey]);
+  const needsFullHistory = view === "stats" || view === "payroll";
+  useEffect(() => {
+    if (!authReady || !loaded) return;
+    const olderViewed =
+      (view === "month" && dateKey(startOfMonth(selectedDate)) < cutoffKey) ||
+      (view === "day" && dateKey(selectedDate) < cutoffKey);
+    if (needsFullHistory || olderViewed) ensureHistory();
+  }, [authReady, loaded, view, selectedDate, cutoffKey, needsFullHistory, ensureHistory]);
+
+  // Preimenovanje usluge/klijenta: prepiši ime na SVIM terminima (i starijim koji nisu učitani).
+  const propagateField = useCallback(async (field, oldValue, newValue) => {
+    try {
+      const snap = await getDocs(query(collection(db, COLLECTION_APPOINTMENTS), where(field, "==", oldValue)));
+      await Promise.all(snap.docs.map((d) => updateDoc(d.ref, { [field]: newValue })));
+      setOlderAppts((prev) => prev.map((a) => (a[field] === oldValue ? { ...a, [field]: newValue } : a)));
+    } catch (e) {
+      console.error(e);
+      setSaveError(true);
+    }
+  }, []);
   // Ko je i kad poslednji menjao termin — osnova za obaveštenja.
   const meValid = employees.some((e) => e.id === myId);
   const stamp = () => (meValid ? { modifiedBy: myId, modifiedAt: Date.now() } : {});
@@ -739,16 +814,7 @@ export default function SalonApp() {
         // Ako je promenjeno ime klijenta, prepiši ga i na sve već zakazane
         // termine koji su koristili staro ime (isti princip kao kod
         // preimenovanja usluga — zaključeni obračuni se ne diraju).
-        if (current && current.name !== trimmed) {
-          appointments
-            .filter((a) => a.client === current.name)
-            .forEach((a) => {
-              updateDoc(doc(db, COLLECTION_APPOINTMENTS, a.id), { client: trimmed }).catch((e) => {
-                console.error(e);
-                setSaveError(true);
-              });
-            });
-        }
+        if (current && current.name !== trimmed) propagateField("client", current.name, trimmed);
         return;
       }
       const existing = clients.find((c) => c.name.toLowerCase() === trimmed.toLowerCase());
@@ -764,7 +830,7 @@ export default function SalonApp() {
         });
       }
     },
-    [clients, appointments]
+    [clients, propagateField]
   );
   const deleteClient = (id) => {
     deleteDoc(doc(db, COLLECTION_CLIENTS, id)).catch((e) => {
@@ -791,16 +857,7 @@ export default function SalonApp() {
     // Ako je promenjeno ime usluge, prepiši ga i na sve već zakazane termine
     // koji su koristili staro ime (obračuni koji su već zaključeni ostaju
     // netaknuti — oni su namerno "zamrznut" istorijski zapis).
-    if (current && patch.name && patch.name !== current.name) {
-      appointments
-        .filter((a) => a.service === current.name)
-        .forEach((a) => {
-          updateDoc(doc(db, COLLECTION_APPOINTMENTS, a.id), { service: patch.name }).catch((e) => {
-            console.error(e);
-            setSaveError(true);
-          });
-        });
-    }
+    if (current && patch.name && patch.name !== current.name) propagateField("service", current.name, patch.name);
   };
   const updateEmployee = (id, patch) => {
     updateDoc(doc(db, COLLECTION_EMPLOYEES, id), patch).catch((e) => {
@@ -861,6 +918,10 @@ export default function SalonApp() {
     try {
       if (data.appointments !== undefined) await replaceCollection(COLLECTION_APPOINTMENTS, data.appointments);
       if (data.clients !== undefined) await replaceCollection(COLLECTION_CLIENTS, data.clients);
+      // keš starijih termina više ne važi — učitaće se ponovo po potrebi
+      setOlderAppts([]);
+      historyPromiseRef.current = null;
+      setHistoryState("idle");
       setSaveError(false);
     } catch (e) {
       console.error(e);
@@ -970,9 +1031,26 @@ export default function SalonApp() {
         </div>
       )}
 
+      {historyState === "loading" && (view === "month" || view === "day") && (
+        <div style={styles.historyBar}>⏳ Učitavam raniji period…</div>
+      )}
+
       {!loaded ? (
         <div style={styles.loadingWrap}>
           <div style={styles.loadingText}>Učitavanje evidencije…</div>
+        </div>
+      ) : needsFullHistory && historyState !== "loaded" ? (
+        <div style={styles.loadingWrap}>
+          <div style={styles.loadingText}>
+            {historyState === "error" ? (
+              <>
+                Učitavanje starijih termina nije uspelo.{" "}
+                <button style={styles.cancelBtn} onClick={ensureHistory}>Pokušaj ponovo</button>
+              </>
+            ) : (
+              "Učitavam raniji period…"
+            )}
+          </div>
         </div>
       ) : view === "month" ? (
         <MonthView
@@ -3223,6 +3301,10 @@ const styles = {
   header: {
     padding: "10px 18px 0", borderBottom: "1px solid #EFE3D0", position: "sticky", top: 0,
     background: "#FBF6EE", zIndex: 5,
+  },
+  historyBar: {
+    background: "#EEF4F1", border: "1px solid #B9D3C8", borderRadius: 10, margin: "8px 12px 0",
+    padding: "6px 10px", fontSize: 13, color: "#2B1B1F",
   },
   saveErrorBanner: { fontSize: 11.5, color: "#A13A3A", textAlign: "center", padding: "4px 0" },
   tabRow: { display: "flex", gap: 4, marginTop: 4 },
