@@ -7,6 +7,7 @@ import { db, auth } from "./firebase";
 import PayrollView from "./payroll/PayrollView.jsx";
 import * as XLSX from "xlsx";
 import PinGate from "./PinGate.jsx";
+import { enablePush, refreshPush, disablePush, listenForeground, sendPush, pushPermission, pushSupported } from "./push";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Cell, LabelList,
 } from "recharts";
@@ -294,6 +295,11 @@ export default function SalonApp() {
     }
   });
   const [identityOpen, setIdentityOpen] = useState(false);
+  const [pushPerm, setPushPerm] = useState(() => pushPermission());
+  const [pushCanUse, setPushCanUse] = useState(false);
+  const [pushBarHidden, setPushBarHidden] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [toast, setToast] = useState(null);
   const [identitySkipped, setIdentitySkipped] = useState(false);
   // Trenutak do kog su obaveštenja pročitana; prvi put = sada (da se ne prikaže stara istorija).
   const [seenAt, setSeenAt] = useState(() => {
@@ -570,8 +576,44 @@ export default function SalonApp() {
   const meValid = employees.some((e) => e.id === myId);
   const stamp = () => (meValid ? { modifiedBy: myId, modifiedAt: Date.now() } : {});
 
+  // ---- Push obaveštenja: za SVAKU promenu na kalendaru druge radnice ----
+  const actorName = employees.find((e) => e.id === myId)?.name || "Neko";
+  const makePushMsg = (to, kind, title, a) => {
+    const [, mm, dd] = String(a.date || "").split("-");
+    return {
+      to,
+      kind,
+      title,
+      body: `${actorName}: ${dd}.${mm}. u ${a.time} — ${a.service}${a.client ? ` (${a.client})` : ""}`,
+    };
+  };
+  // kind: 'add' | 'edit' | 'delete'. 'before' = stanje pre, 'after' = stanje posle.
+  const pushChange = (kind, before, after) => {
+    if (!meValid) return;
+    const ref = after || before;
+    if (!ref || ref.blocked) return;
+    const msgs = [];
+    if (kind === "add") {
+      if (after.staff !== myId) msgs.push(makePushMsg(after.staff, "add", "Novi termin", after));
+    } else if (kind === "delete") {
+      if (before.staff !== myId) msgs.push(makePushMsg(before.staff, "delete", "Termin otkazan", before));
+    } else {
+      const fields = ["date", "time", "staff", "service", "client", "duration"];
+      if (!fields.some((f) => String(before[f] ?? "") !== String(after[f] ?? ""))) return;
+      if (after.staff !== before.staff) {
+        if (after.staff !== myId) msgs.push(makePushMsg(after.staff, "add", "Novi termin", after));
+        if (before.staff !== myId) msgs.push(makePushMsg(before.staff, "away", "Termin premešten drugoj radnici", before));
+      } else if (after.staff !== myId) {
+        msgs.push(makePushMsg(after.staff, "edit", "Termin izmenjen", after));
+      }
+    }
+    if (msgs.length) sendPush(msgs);
+  };
+
   const moveAppointment = (id, newStaff, newTime) => {
+    const before = appointments.find((a) => a.id === id);
     updateAppointment(id, { staff: newStaff, time: newTime, ...stamp() });
+    if (before) pushChange("edit", before, { ...before, staff: newStaff, time: newTime });
   };
 
   const chooseIdentity = (id) => {
@@ -580,7 +622,40 @@ export default function SalonApp() {
     } catch (e) {}
     setMyId(id);
     setIdentityOpen(false);
+    // Uređaj se vezuje za izabranu radnicu (ili uklanja ako se ne koristi kao radnica).
+    if (id === "-") disablePush();
+    else if (pushPermission() === "granted") refreshPush(id);
   };
+  const turnOnPush = async () => {
+    setPushBusy(true);
+    const r = await enablePush(myId);
+    setPushPerm(pushPermission());
+    setPushBusy(false);
+    if (!r.ok && r.reason === "error") window.alert("Uključivanje obaveštenja nije uspelo. Pokušaj ponovo.");
+  };
+  useEffect(() => {
+    pushSupported().then(setPushCanUse);
+  }, []);
+  // Tiho osvežavanje tokena + prikaz poruka dok je aplikacija otvorena.
+  useEffect(() => {
+    if (!authReady || !meValid || pushPerm !== "granted") return;
+    refreshPush(myId);
+    let unsub = () => {};
+    let cancelled = false;
+    listenForeground((d) => {
+      if (d.kind === "delete" || d.kind === "away") {
+        setToast({ title: d.title, body: d.body });
+        setTimeout(() => setToast(null), 8000);
+      }
+    }).then((u) => {
+      if (cancelled) u();
+      else unsub = u;
+    });
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, [authReady, myId, meValid, pushPerm]);
   const markNoticesSeen = () => {
     const now = Date.now();
     try {
@@ -838,6 +913,35 @@ export default function SalonApp() {
         onOpenIdentity={() => setIdentityOpen(true)}
       />
 
+      {loaded && meValid && !pushBarHidden && pushPerm === "default" && pushCanUse && (
+        <div style={styles.pushBar}>
+          <span>🔔 Uključi obaveštenja na ovom telefonu, da ti stižu i kad aplikacija nije otvorena.</span>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button style={styles.pushBarLater} onClick={() => setPushBarHidden(true)}>Ne sad</button>
+            <button style={styles.pushBarOn} onClick={turnOnPush} disabled={pushBusy}>
+              {pushBusy ? "…" : "Uključi"}
+            </button>
+          </div>
+        </div>
+      )}
+      {loaded && meValid && !pushCanUse && isIOS && !window.navigator.standalone && !pushBarHidden && (
+        <div style={styles.pushBar}>
+          <span>
+            🔔 Za obaveštenja na iPhone-u: u Safari-ju pritisni „Podeli“ → „Dodaj na početni ekran“, pa otvori aplikaciju
+            odatle.
+          </span>
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <button style={styles.pushBarLater} onClick={() => setPushBarHidden(true)}>U redu</button>
+          </div>
+        </div>
+      )}
+      {toast && (
+        <div style={styles.toast} onClick={() => setToast(null)}>
+          <b>{toast.title}</b>
+          <div>{toast.body}</div>
+        </div>
+      )}
+
       {loaded && notices.length > 0 && (
         <div style={styles.noticeBar}>
           {notices.slice(0, 3).map((a) => {
@@ -983,8 +1087,10 @@ export default function SalonApp() {
             }
             if (editingAppt) {
               updateAppointment(editingAppt.id, { ...apptData, ...(linkToId ? { groupId } : {}), ...stamp() });
+              pushChange("edit", editingAppt, { ...editingAppt, ...apptData });
             } else {
               addAppointment({ ...apptData, groupId, ...(meValid ? { createdBy: myId } : {}), ...stamp() });
+              pushChange("add", null, apptData);
             }
             closeForm();
           }}
@@ -992,6 +1098,7 @@ export default function SalonApp() {
             editingAppt
               ? () => {
                   deleteAppointment(editingAppt.id);
+                  pushChange("delete", editingAppt, null);
                   closeForm();
                 }
               : null
@@ -3298,6 +3405,22 @@ const styles = {
     border: "none", background: "none", textAlign: "left", fontSize: 13.5, color: "#2B1B1F", padding: "4px 2px",
   },
   noticeMore: { fontSize: 12, color: "#8A7368" },
+  pushBar: {
+    background: "#EEF4F1", border: "1px solid #B9D3C8", borderRadius: 10, margin: "8px 12px 0",
+    padding: "8px 10px", display: "flex", flexDirection: "column", gap: 8, fontSize: 13.5, color: "#2B1B1F",
+  },
+  pushBarOn: {
+    border: "none", background: "#4A7A6B", color: "#fff", borderRadius: 8, padding: "6px 16px",
+    fontSize: 13, fontWeight: 600,
+  },
+  pushBarLater: {
+    border: "1px solid #B9D3C8", background: "#FFFDF9", color: "#4A7A6B", borderRadius: 8, padding: "6px 14px",
+    fontSize: 13, fontWeight: 500,
+  },
+  toast: {
+    position: "fixed", left: 12, right: 12, bottom: 16, zIndex: 60, background: "#2B1B1F", color: "#FBF6EE",
+    borderRadius: 12, padding: "12px 14px", fontSize: 13.5, boxShadow: "0 6px 24px rgba(0,0,0,0.3)",
+  },
   noticeDismiss: {
     alignSelf: "flex-end", border: "1px solid #C4914B", background: "#FFFDF9", color: "#7A5A1E",
     borderRadius: 8, padding: "4px 12px", fontSize: 12.5, fontWeight: 600,
