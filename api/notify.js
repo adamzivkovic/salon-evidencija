@@ -1,6 +1,9 @@
 // Vercel funkcija: šalje push obaveštenje uređajima radnice kojoj je termin dodat/izmenjen/obrisan.
 // Tajni ključ servisnog naloga čita se ISKLJUČIVO iz Vercel promenljive FIREBASE_SERVICE_ACCOUNT.
-import admin from "firebase-admin";
+import { initializeApp, getApps, cert } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
+import { getFirestore } from "firebase-admin/firestore";
+import { getMessaging } from "firebase-admin/messaging";
 
 const BAD_TOKEN_CODES = [
   "messaging/registration-token-not-registered",
@@ -8,9 +11,9 @@ const BAD_TOKEN_CODES = [
 ];
 
 function init() {
-  if (admin.apps.length) return;
+  if (getApps().length) return;
   const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-  admin.initializeApp({ credential: admin.credential.cert(sa) });
+  initializeApp({ credential: cert(sa) });
 }
 
 const clip = (v, n) => String(v ?? "").slice(0, n);
@@ -26,11 +29,11 @@ export default async function handler(req, res) {
     init();
     const m = /^Bearer (.+)$/.exec(req.headers.authorization || "");
     if (!m) return res.status(401).json({ error: "auth" });
-    await admin.auth().verifyIdToken(m[1]); // samo prijavljeni korisnici aplikacije
+    await getAuth().verifyIdToken(m[1]); // samo prijavljeni korisnici aplikacije
 
     const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
     const messages = Array.isArray(body.messages) ? body.messages.slice(0, 6) : [];
-    const db = admin.firestore();
+    const db = getFirestore();
     let sent = 0;
 
     for (const msg of messages) {
@@ -40,7 +43,7 @@ export default async function handler(req, res) {
       const tokens = snap.docs.map((d) => d.id);
       if (!tokens.length) continue;
 
-      const resp = await admin.messaging().sendEachForMulti({
+      const resp = await getMessaging().sendEachForMulti({
         tokens,
         data: {
           title: clip(msg.title, 80),
