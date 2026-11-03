@@ -7,7 +7,7 @@ import { db, auth } from "./firebase";
 // Javni "Web Push" ključ iz Firebase konzole:
 // Project settings → Cloud Messaging → Web Push certificates → Generate key pair.
 // (Javan je po dizajnu, sme da stoji u kodu.)
-const VAPID_KEY = "ZALEPI_OVDE_JAVNI_VAPID_KLJUC";
+const VAPID_KEY = "BHWySoSgWsndVNeC2E4PyXIi9tKavByiK2cpsiKdFnIIR0YwGet3ud4AMg0hp1L3aX9x6SqmV-Uxe8_W9oYnRoQ";
 
 // Za lokalni test protiv objavljene funkcije: VITE_API_BASE=https://tvoj-link.vercel.app
 const API_BASE = import.meta.env.VITE_API_BASE || "";
