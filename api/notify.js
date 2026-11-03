@@ -45,9 +45,10 @@ export default async function handler(req, res) {
       if (!to) continue;
       const snap = await db.collection("deviceTokens").where("employeeId", "==", to).get();
       const tokens = snap.docs.map((d) => d.id);
+      console.log("notify:", { to, kind: clip(msg.kind, 16), uredjaja: tokens.length });
       if (!tokens.length) continue;
 
-      const resp = await getMessaging().sendEachForMulti({
+      const resp = await getMessaging().sendEachForMulticast({
         tokens,
         data: {
           title: clip(msg.title, 80),
@@ -59,6 +60,12 @@ export default async function handler(req, res) {
       });
 
       sent += resp.successCount;
+      console.log("notify rezultat:", {
+        to,
+        uspelo: resp.successCount,
+        nije: resp.failureCount,
+        greske: resp.responses.filter((r) => !r.success).map((r) => r.error?.code),
+      });
       // Očisti uređaje koji više ne postoje (obrisana aplikacija, odjavljen uređaj...).
       await Promise.all(
         resp.responses.map((r, i) =>

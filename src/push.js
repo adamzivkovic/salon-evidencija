@@ -7,7 +7,7 @@ import { db, auth } from "./firebase";
 // Javni "Web Push" ključ iz Firebase konzole:
 // Project settings → Cloud Messaging → Web Push certificates → Generate key pair.
 // (Javan je po dizajnu, sme da stoji u kodu.)
-const VAPID_KEY = "BHWySoSgWsndVNeC2E4PyXIi9tKavByiK2cpsiKdFnIIR0YwGet3ud4AMg0hp1L3aX9x6SqmV-Uxe8_W9oYnRoQ";
+const VAPID_KEY = "ZALEPI_OVDE_JAVNI_VAPID_KLJUC";
 
 // Za lokalni test protiv objavljene funkcije: VITE_API_BASE=https://tvoj-link.vercel.app
 const API_BASE = import.meta.env.VITE_API_BASE || "";
@@ -93,12 +93,13 @@ export async function sendPush(messages) {
     const user = auth.currentUser;
     if (!user || !messages.length) return;
     const idToken = await user.getIdToken();
-    await fetch(`${API_BASE}/api/notify`, {
+    const res = await fetch(`${API_BASE}/api/notify`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
       body: JSON.stringify({ messages }),
       keepalive: true,
     });
+    if (!res.ok) console.error("Obaveštenje: server je vratio", res.status);
   } catch (e) {
     console.error("Slanje obaveštenja nije uspelo:", e);
   }
